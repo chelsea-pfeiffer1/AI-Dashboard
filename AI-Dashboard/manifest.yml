@@ -1,0 +1,31 @@
+modules:
+  confluence:globalPage:
+    - key: ai-dashboard-hello-world
+      resource: main
+      resolver:
+        function: resolver
+      title: AI Dashboard
+      route: hello-world
+
+function:
+  - key: resolver
+    handler: index.handler
+
+permissions:
+  scopes:
+    - read:jira-work
+    - read:jira-user
+    - read:confluence-content.all
+    - read:confluence-space.summary
+    - storage:app
+
+resources:
+  - key: main
+    path: static/dashboard/build
+
+app:
+  runtime:
+    name: nodejs24.x
+    memoryMB: 256
+    architecture: arm64
+  id: ari:cloud:ecosystem::app/528693a4-8791-4d8e-b5a0-17adb344a972
