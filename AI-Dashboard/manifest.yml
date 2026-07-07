@@ -9,15 +9,19 @@ modules:
 
   function:
     - key: resolver
-      handler: resolver.handler
+      handler: index.handler
 
 permissions:
   scopes:
     - read:jira-work
     - read:jira-user
     - read:confluence-content.all
-    - read:read:confluence-space.summary
+    - read:confluence-space.summary
     - storage:app
+  external:
+    fetch:
+      backend:
+        - api.openai.com
 
 resources:
   - key: main
@@ -28,4 +32,4 @@ app:
     name: nodejs24.x
     memoryMB: 256
     architecture: arm64
-  id: ari:cloud:ecosystem::app/528693a4-8791-4d8e-b5a0-17adb344a972
+  id: ari:cloud:ecosystem::app/83d30c9b-ec7c-4bf9-92ab-b7c2ae7b90f2
