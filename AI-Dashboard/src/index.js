@@ -1,8 +1,14 @@
 const forgeResolverModule = require('@forge/resolver');
 const Resolver = forgeResolverModule.default || forgeResolverModule;
-const { api, storage } = require('@forge/api');
+
+const forgeApiModule = require('@forge/api');
+const api = forgeApiModule.default || forgeApiModule.api || forgeApiModule;
+const storage = forgeApiModule.storage || api.storage;
+const route = forgeApiModule.route || forgeApiModule.default?.route;
 
 const resolver = new Resolver();
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.5';
+const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 20000);
 
 const DEFAULT_RELEASE_OPTIONS = [{ id: '', name: 'Select a release' }];
 const DEFAULT_TEAM_OPTIONS = [{ id: '', name: 'Select a team' }];
@@ -35,6 +41,8 @@ function buildJql({ releaseId, team, view }, settings = {}) {
 
   if (projectKey) {
     clauses.push(`project = "${escapeJqlValue(projectKey)}"`);
+  } else {
+    clauses.push('project is not EMPTY');
   }
 
   if (release) {
@@ -53,13 +61,11 @@ function buildJql({ releaseId, team, view }, settings = {}) {
     }
   }
 
-  const base = clauses.length > 0 ? clauses.join(' AND ') : '';
+  const base = clauses.length > 0 ? clauses.join(' AND ') : 'project is not EMPTY';
   const viewClause =
-    view === 'Release'
-      ? 'ORDER BY priority DESC, updated DESC'
-      : 'ORDER BY updated DESC';
+    view === 'Release' ? 'ORDER BY priority DESC, updated DESC' : 'ORDER BY updated DESC';
 
-  return base ? `${base} ${viewClause}` : viewClause;
+  return `${base} ${viewClause}`;
 }
 
 async function readSettings() {
@@ -89,13 +95,11 @@ async function fetchJiraIssues(jql) {
   let total = 0;
 
   do {
-    const params = new URLSearchParams();
-    params.set('jql', jql);
-    params.set('startAt', String(startAt));
-    params.set('maxResults', String(maxResults));
-    params.set('fields', DEFAULT_FIELDS.join(','));
-
-    const payload = await requestJson(`/rest/api/3/search?${params.toString()}`, {}, 'jira');
+    const payload = await requestJson(
+      route`/rest/api/3/search/jql?jql=${jql}&startAt=${startAt}&maxResults=${maxResults}&fields=${DEFAULT_FIELDS.join(',')}`,
+      {},
+      'jira'
+    );
     const batch = Array.isArray(payload.issues) ? payload.issues : [];
 
     issues.push(...batch);
@@ -266,9 +270,124 @@ function buildActions(issues) {
     .map((issue) => ({
       issueKey: issue?.key || '',
       summary: issue?.fields?.summary || '',
-      owner: issue?.fields?.assignee?.displayName || issue?.fields?.reporter?.displayName || 'Unassigned',
+      owner:
+        issue?.fields?.assignee?.displayName ||
+        issue?.fields?.reporter?.displayName ||
+        'Unassigned',
       status: issue?.fields?.status?.name || 'Unknown',
     }));
+}
+
+function compactIssueRecord(record) {
+  return {
+    issueKey: record?.issueKey || '',
+    issueType: record?.issueType || '',
+    summary: record?.summary || '',
+    status: record?.status || '',
+    owner: record?.owner || '',
+    risk: record?.risk?.label || 'unknown',
+    confidence: record?.confidence?.label || 'unknown',
+  };
+}
+
+function extractOpenAiText(data) {
+  if (typeof data?.output_text === 'string' && data.output_text.trim()) {
+    return data.output_text.trim();
+  }
+
+  const parts = [];
+
+  for (const item of data?.output || []) {
+    if (item?.type !== 'message') {
+      continue;
+    }
+
+    for (const content of item?.content || []) {
+      if (typeof content?.text === 'string' && content.text.trim()) {
+        parts.push(content.text.trim());
+      } else if (typeof content?.value === 'string' && content.value.trim()) {
+        parts.push(content.value.trim());
+      }
+    }
+  }
+
+  return parts.join('\n').trim();
+}
+
+async function summarizeWithOpenAI({ summary, metrics, workstreams, actions, records, sourceLinks }) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        store: false,
+        reasoning: {
+          effort: 'low',
+        },
+        input: [
+          {
+            role: 'system',
+            content:
+              'You are an executive PMO analyst. Use only the supplied Jira and Confluence data. Do not invent facts, dates, owners, risks, or metrics. If information is missing, say so plainly. Return a concise executive readout with these sections: Executive summary, Top risks, Recommended actions, and Confidence.',
+          },
+          {
+            role: 'user',
+            content: JSON.stringify(
+              {
+                summary,
+                metrics,
+                workstreams,
+                actions,
+                records: Array.isArray(records) ? records.map(compactIssueRecord) : [],
+                sourceLinks,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+
+      if (response.status === 429 && body.includes('insufficient_quota')) {
+        console.warn('OpenAI quota exhausted; skipping AI summary.');
+        return null;
+      }
+
+      throw new Error(`OpenAI request failed: ${response.status} ${response.statusText} ${body}`);
+    }
+
+    const data = await response.json();
+    const text = extractOpenAiText(data);
+    return text || null;
+  } catch (error) {
+    const message = String(error?.message || '');
+
+    if (message.includes('insufficient_quota') || message.includes('429')) {
+      console.warn('OpenAI quota exhausted; skipping AI summary.');
+      return null;
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function fetchConfluenceSnapshot(settings = {}) {
@@ -284,7 +403,7 @@ async function fetchConfluenceSnapshot(settings = {}) {
 
   if (pageId) {
     const page = await requestJson(
-      `/wiki/rest/api/content/${pageId}?expand=version,space,body.storage`,
+      route`/wiki/rest/api/content/${pageId}?expand=version,space,body.storage`,
       {},
       'confluence'
     );
@@ -297,12 +416,11 @@ async function fetchConfluenceSnapshot(settings = {}) {
     };
   }
 
-  const params = new URLSearchParams();
-  params.set('cql', cql);
-  params.set('limit', '10');
-  params.set('expand', 'version,space');
-
-  const search = await requestJson(`/wiki/rest/api/search?${params.toString()}`, {}, 'confluence');
+  const search = await requestJson(
+    route`/wiki/rest/api/search?cql=${cql}&limit=10&expand=version,space`,
+    {},
+    'confluence'
+  );
   return {
     pages: Array.isArray(search.results) ? search.results : [],
     source: {
@@ -316,7 +434,7 @@ function buildSourceLinks({ jql, confluenceSnapshot, settings, refreshedAt }) {
   return {
     jira: {
       system: 'Jira',
-      endpoint: '/rest/api/3/search',
+      endpoint: '/rest/api/3/search/jql',
       jql,
       transformationSummary: 'Fetched live issues and derived dashboard metrics from Jira fields.',
       lastRefresh: refreshedAt,
@@ -329,6 +447,14 @@ function buildSourceLinks({ jql, confluenceSnapshot, settings, refreshedAt }) {
       transformationSummary: confluenceSnapshot?.pages?.length
         ? 'Fetched configured executive source pages from Confluence.'
         : 'No Confluence source was configured, so no Confluence records were included.',
+      lastRefresh: refreshedAt,
+    },
+    openai: {
+      system: 'OpenAI',
+      endpoint: '/v1/responses',
+      model: OPENAI_MODEL,
+      transformationSummary:
+        'Analyzed only the live Jira and Confluence payload supplied by the backend resolver.',
       lastRefresh: refreshedAt,
     },
   };
@@ -346,6 +472,33 @@ resolver.define('getDashboardData', async ({ payload }) => {
   const metrics = buildMetrics(issues);
   const workstreams = buildWorkstreams(issues);
   const actions = buildActions(issues);
+  const sourceLinks = buildSourceLinks({ jql, confluenceSnapshot, settings, refreshedAt });
+  const normalizedRecords = issues.map((issue) => ({
+    issueKey: issue?.key || '',
+    issueType: issue?.fields?.issuetype?.name || 'Issue',
+    summary: issue?.fields?.summary || 'No summary',
+    status: issue?.fields?.status?.name || 'Unknown',
+    owner:
+      issue?.fields?.assignee?.displayName ||
+      issue?.fields?.reporter?.displayName ||
+      'Unassigned',
+    risk: { label: 'unknown' },
+    confidence: { label: 'unknown' },
+  }));
+  const aiSummary = await summarizeWithOpenAI({
+    summary: {
+      total: issues.length,
+      visible: issues.length,
+      jql,
+      refreshedAt,
+      sourceSystem: 'Jira',
+    },
+    metrics,
+    workstreams,
+    actions,
+    records: normalizedRecords.slice(0, 25),
+    sourceLinks,
+  });
 
   return {
     releaseOptions,
@@ -363,6 +516,7 @@ resolver.define('getDashboardData', async ({ payload }) => {
       metrics,
       workstreams,
       actions,
+      aiSummary,
       baselineSnapshot: {
         sourceSystem: 'Confluence',
         pages: confluenceSnapshot.pages.length,
@@ -371,10 +525,11 @@ resolver.define('getDashboardData', async ({ payload }) => {
         sourceSystem: 'Jira',
         issues: issues.length,
       },
-      sourceLinks: buildSourceLinks({ jql, confluenceSnapshot, settings, refreshedAt }),
+      sourceLinks,
       cardStates: {
         jira: issues.length > 0 ? 'loaded' : 'empty',
         confluence: confluenceSnapshot.pages.length > 0 ? 'loaded' : 'empty',
+        openai: aiSummary ? 'loaded' : 'empty',
       },
     },
   };

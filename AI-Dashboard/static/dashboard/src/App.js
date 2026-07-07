@@ -27,9 +27,10 @@ export default function App() {
     viewOptions,
   } = useDashboardData();
 
-  if (loading && !dashboard) {
-    return <LoadingScreen />;
-  }
+
+  if (loading) {
+  return <LoadingScreen />;
+}
 
   return (
     <div
