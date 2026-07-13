@@ -1,8 +1,19 @@
 import React from 'react';
 
 export default function ExecutiveTakeaway({ dashboard }) {
-  const metrics = dashboard?.metrics || {};
-  const total = dashboard?.summary?.total ?? 0;
+  const records =
+    Array.isArray(dashboard?.cardData?.executiveTakeaway?.records) && dashboard.cardData.executiveTakeaway.records.length > 0
+      ? dashboard.cardData.executiveTakeaway.records
+      : Array.isArray(dashboard?.records)
+      ? dashboard.records
+      : [];
+
+  const total = records.length;
+  const metrics = {
+    highRisk: records.filter((record) => (record?.risk?.label || '').toLowerCase() === 'high').length,
+    blockers: records.filter((record) => /blocked|blocker/i.test(`${record?.status || ''} ${record?.summary || ''}`)).length,
+    decisionsNeeded: records.filter((record) => /decision|approve|clarify|confirm/i.test(`${record?.status || ''} ${record?.summary || ''}`)).length,
+  };
 
   let message = 'No live data is available yet.';
   if (total > 0) {

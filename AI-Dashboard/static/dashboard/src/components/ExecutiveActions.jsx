@@ -1,6 +1,13 @@
 import React from 'react';
 
 export default function ExecutiveActions({ dashboard }) {
+  const records =
+    Array.isArray(dashboard?.cardData?.executiveActions?.records) && dashboard.cardData.executiveActions.records.length > 0
+      ? dashboard.cardData.executiveActions.records
+      : Array.isArray(dashboard?.records)
+      ? dashboard.records
+      : [];
+
   const actions = Array.isArray(dashboard?.actions) ? dashboard.actions : [];
 
   return (

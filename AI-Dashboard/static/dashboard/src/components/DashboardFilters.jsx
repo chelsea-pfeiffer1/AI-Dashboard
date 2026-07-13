@@ -54,8 +54,7 @@ export default function DashboardFilters({
   resetConfig,
   refresh,
   releaseOptions = [],
-  teamOptions = [],
-  viewOptions = [],
+  confluenceSpaceOptions = [],
   dashboard,
 }) {
   const handleApply = () => {
@@ -66,7 +65,7 @@ export default function DashboardFilters({
     resetConfig();
     refresh({
       releaseId: '',
-      team: '',
+      confluenceSpaceKey: '',
       view: 'Executive',
     });
   };
@@ -159,7 +158,7 @@ export default function DashboardFilters({
         }}
       >
         <div>
-          <FieldLabel>Release</FieldLabel>
+          <FieldLabel>Select a Release</FieldLabel>
           <Select
             ariaLabel="Release"
             value={config.releaseId}
@@ -170,24 +169,13 @@ export default function DashboardFilters({
         </div>
 
         <div>
-          <FieldLabel>Team</FieldLabel>
+          <FieldLabel>Select a Confluence Space</FieldLabel>
           <Select
-            ariaLabel="Team"
-            value={config.team}
-            onChange={(value) => updateConfig({ team: value })}
-            options={teamOptions}
-            disabled={teamOptions.length === 0}
-          />
-        </div>
-
-        <div>
-          <FieldLabel>View</FieldLabel>
-          <Select
-            ariaLabel="View"
-            value={config.view}
-            onChange={(value) => updateConfig({ view: value })}
-            options={viewOptions}
-            disabled={viewOptions.length === 0}
+            ariaLabel="Confluence Space"
+            value={config.confluenceSpaceKey}
+            onChange={(value) => updateConfig({ confluenceSpaceKey: value })}
+            options={confluenceSpaceOptions}
+            disabled={confluenceSpaceOptions.length === 0}
           />
         </div>
       </div>

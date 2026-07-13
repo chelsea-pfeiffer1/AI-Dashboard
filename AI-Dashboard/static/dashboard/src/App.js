@@ -23,14 +23,12 @@ export default function App() {
     resetConfig,
     refresh,
     releaseOptions,
-    teamOptions,
-    viewOptions,
+    confluenceSpaceOptions,
   } = useDashboardData();
 
-
   if (loading) {
-  return <LoadingScreen />;
-}
+    return <LoadingScreen />;
+  }
 
   return (
     <div
@@ -88,8 +86,7 @@ export default function App() {
           resetConfig={resetConfig}
           refresh={refresh}
           releaseOptions={releaseOptions}
-          teamOptions={teamOptions}
-          viewOptions={viewOptions}
+          confluenceSpaceOptions={confluenceSpaceOptions}
           dashboard={dashboard}
         />
 

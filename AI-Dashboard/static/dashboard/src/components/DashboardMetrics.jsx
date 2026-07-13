@@ -18,8 +18,58 @@ function MetricCard({ label, value }) {
   );
 }
 
+function deriveMetrics(records) {
+  const highRisk = records.filter((record) => {
+    const priority = String(record?.risk?.label || '').toLowerCase();
+    const labels = Array.isArray(record?.labels) ? record.labels.map((label) => String(label).toLowerCase()) : [];
+    const summary = String(record?.summary || '');
+    const status = String(record?.status || '');
+
+    return (
+      priority.includes('highest') ||
+      priority.includes('critical') ||
+      priority.includes('blocker') ||
+      labels.includes('blocker') ||
+      /critical|blocker/i.test(`${summary} ${status}`)
+    );
+  }).length;
+
+  const mediumRisk = records.filter((record) => {
+    const priority = String(record?.risk?.label || '').toLowerCase();
+    const labels = Array.isArray(record?.labels) ? record.labels.map((label) => String(label).toLowerCase()) : [];
+
+    return (
+      priority.includes('high') ||
+      priority.includes('medium') ||
+      labels.includes('high') ||
+      labels.includes('medium')
+    );
+  }).length;
+
+  const blockers = records.filter((record) => {
+    const summary = String(record?.summary || '');
+    const status = String(record?.status || '');
+    return /blocked|blocker/i.test(`${status} ${summary}`);
+  }).length;
+
+  const decisionsNeeded = records.filter((record) => {
+    const summary = String(record?.summary || '');
+    const status = String(record?.status || '');
+    return /decision|approve|clarify|confirm/i.test(`${status} ${summary}`);
+  }).length;
+
+  return { highRisk, mediumRisk, blockers, decisionsNeeded };
+}
+
 export default function DashboardMetrics({ dashboard }) {
-  const metrics = dashboard?.metrics || {};
+  const records =
+    Array.isArray(dashboard?.cardData?.metrics?.records) && dashboard.cardData.metrics.records.length > 0
+      ? dashboard.cardData.metrics.records
+      : Array.isArray(dashboard?.records)
+      ? dashboard.records
+      : [];
+
+  const metrics = deriveMetrics(records);
 
   return (
     <section

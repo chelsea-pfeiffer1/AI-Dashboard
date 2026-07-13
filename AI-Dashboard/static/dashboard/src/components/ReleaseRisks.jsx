@@ -1,7 +1,12 @@
 import React from 'react';
 
 export default function ReleaseRisks({ dashboard }) {
-  const records = Array.isArray(dashboard?.records) ? dashboard.records : [];
+  const records =
+    Array.isArray(dashboard?.cardData?.releaseRisks?.records) && dashboard.cardData.releaseRisks.records.length > 0
+      ? dashboard.cardData.releaseRisks.records
+      : Array.isArray(dashboard?.records)
+      ? dashboard.records
+      : [];
   const risks = records.filter((record) => record?.risk?.label === 'high').slice(0, 8);
 
   return (

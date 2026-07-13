@@ -1,6 +1,13 @@
 import React from 'react';
 
 export default function CommittedScope({ dashboard }) {
+  const records =
+    Array.isArray(dashboard?.cardData?.committedScope?.records) && dashboard.cardData.committedScope.records.length > 0
+      ? dashboard.cardData.committedScope.records
+      : Array.isArray(dashboard?.records)
+      ? dashboard.records
+      : [];
+
   const scope = dashboard?.committedScope || {};
 
   return (

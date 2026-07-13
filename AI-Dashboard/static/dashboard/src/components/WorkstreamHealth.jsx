@@ -1,7 +1,27 @@
 import React from 'react';
 
 export default function WorkstreamHealth({ dashboard }) {
-  const workstreams = Array.isArray(dashboard?.workstreams) ? dashboard.workstreams : [];
+  const records =
+    Array.isArray(dashboard?.cardData?.workstreamHealth?.records) && dashboard.cardData.workstreamHealth.records.length > 0
+      ? dashboard.cardData.workstreamHealth.records
+      : Array.isArray(dashboard?.records)
+      ? dashboard.records
+      : [];
+
+  const workstreams = React.useMemo(() => {
+    const buckets = new Map();
+
+    records.forEach((record) => {
+      const name = record?.issueType || 'Other';
+      const current = buckets.get(name) || { name, count: 0 };
+      current.count += 1;
+      buckets.set(name, current);
+    });
+
+    return Array.from(buckets.values())
+      .map((item) => ({ ...item, percent: 100 }))
+      .sort((a, b) => b.count - a.count);
+  }, [records]);
 
   return (
     <section

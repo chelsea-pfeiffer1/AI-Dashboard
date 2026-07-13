@@ -28,21 +28,30 @@ const DEFAULT_FIELDS = [
 ];
 const SETTINGS_KEY = 'dashboard-settings';
 
+const CARD_JQL_FILTERS = {
+  metrics: 'priority in (Highest, High) OR labels = blocker OR status = Blocked',
+  executiveTakeaway: 'priority in (Highest, High) OR labels = blocker OR status in ("Blocked", "In Progress")',
+  workstreamHealth: '',
+  baselineSnapshot: 'labels = baseline OR summary ~ "baseline"',
+  committedScope: 'status not in ("Cancelled", "Out of Scope", "Done")',
+  releaseRisks: 'priority in (Highest, High) OR labels = blocker OR status = Blocked',
+  executiveActions: 'priority in (Highest, High) OR labels = blocker OR status in ("Blocked", "In Progress")',
+  sourceLinks: '',
+};
+
 function escapeJqlValue(value) {
   return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-function buildJql({ releaseId, team, view }, settings = {}) {
+function buildJqlFilter({ releaseId, team }, settings = {}) {
   const clauses = [];
-  const projectKey = String(settings.jiraProjectKey || '').trim();
+  const projectKey = String(settings.jiraProjectKey || process.env.JIRA_PROJECT_KEY || '').trim();
   const release = String(releaseId || '').trim();
   const teamValue = String(team || '').trim();
   const configuredTeamField = String(settings.jiraTeamField || '').trim();
 
   if (projectKey) {
     clauses.push(`project = "${escapeJqlValue(projectKey)}"`);
-  } else {
-    clauses.push('project is not EMPTY');
   }
 
   if (release) {
@@ -61,11 +70,87 @@ function buildJql({ releaseId, team, view }, settings = {}) {
     }
   }
 
-  const base = clauses.length > 0 ? clauses.join(' AND ') : 'project is not EMPTY';
+  return clauses.length > 0 ? clauses.join(' AND ') : 'updated >= -30d';
+}
+
+function buildJql({ releaseId, team, view }, settings = {}) {
+  const clauses = [];
+  const projectKey = String(settings.jiraProjectKey || process.env.JIRA_PROJECT_KEY || '').trim();
+  const release = String(releaseId || '').trim();
+  const teamValue = String(team || '').trim();
+  const configuredTeamField = String(settings.jiraTeamField || '').trim();
+
+  if (projectKey) {
+    clauses.push(`project = "${escapeJqlValue(projectKey)}"`);
+  }
+
+  if (release) {
+    clauses.push(`fixVersion = "${escapeJqlValue(release)}"`);
+  }
+
+  if (teamValue && configuredTeamField) {
+    clauses.push(`"${escapeJqlValue(configuredTeamField)}" = "${escapeJqlValue(teamValue)}"`);
+  }
+
+  if (Array.isArray(settings.extraJqlClauses) && settings.extraJqlClauses.length > 0) {
+    for (const clause of settings.extraJqlClauses) {
+      if (typeof clause === 'string' && clause.trim()) {
+        clauses.push(clause.trim());
+      }
+    }
+  }
+
   const viewClause =
     view === 'Release' ? 'ORDER BY priority DESC, updated DESC' : 'ORDER BY updated DESC';
 
-  return `${base} ${viewClause}`;
+  return `${buildJqlFilter({ releaseId, team }, settings)} ${viewClause}`;
+}
+
+function normalizeJiraIssue(issue = {}) {
+  const fields = issue?.fields || {};
+  const summary = String(fields.summary || 'No summary').trim();
+  const issueKey = String(issue?.key || fields.key || summary || '').trim();
+  const issueType = String(fields.issuetype?.name || 'Issue').trim();
+  const status = String(fields.status?.name || 'Unknown').trim();
+  const owner = String(fields.assignee?.displayName || fields.reporter?.displayName || 'Unassigned').trim();
+  const priority = String(fields.priority?.name || '').toLowerCase();
+  const labels = Array.isArray(fields.labels) ? fields.labels.map((l) => String(l).trim()).filter(Boolean) : [];
+
+  let risk = 'low';
+  if (
+    priority.includes('highest') ||
+    priority.includes('critical') ||
+    priority.includes('blocker') ||
+    labels.includes('blocker') ||
+    /critical|blocker/i.test(`${summary} ${status}`)
+  ) {
+    risk = 'high';
+  } else if (priority.includes('high') || labels.includes('high')) {
+    risk = 'medium';
+  }
+
+  const confidence = /done|closed|resolved/i.test(status) ? 'high' : risk === 'low' ? 'medium' : 'low';
+
+  return {
+    issueKey,
+    issueType,
+    summary,
+    status,
+    owner,
+    labels,
+    risk: { label: risk },
+    confidence: { label: confidence },
+    sourceLink: String(fields.self || issue?.self || '').trim(),
+    raw: issue,
+  };
+}
+
+function buildCardJql(baseFilter, cardClause, view) {
+  const combined = baseFilter && cardClause ? `${baseFilter} AND (${cardClause})` : baseFilter || cardClause || 'updated >= -30d';
+  const viewClause =
+    view === 'Release' ? 'ORDER BY priority DESC, updated DESC' : 'ORDER BY updated DESC';
+
+  return `${combined} ${viewClause}`;
 }
 
 async function readSettings() {
@@ -116,19 +201,55 @@ function buildReleaseOptions(issues) {
   for (const issue of issues) {
     const versions = Array.isArray(issue?.fields?.fixVersions) ? issue.fields.fixVersions : [];
     for (const version of versions) {
-      const id = String(version?.id || version?.name || '').trim();
       const name = String(version?.name || version?.id || '').trim();
-      if (!id && !name) {
+      if (!name) {
         continue;
       }
 
-      const key = id || name;
-      if (!seen.has(key)) {
-        seen.set(key, {
-          id: key,
-          name: name || key,
+      if (!seen.has(name)) {
+        seen.set(name, {
+          id: name,
+          name,
         });
       }
+    }
+  }
+
+  return [
+    DEFAULT_RELEASE_OPTIONS[0],
+    ...Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name)),
+  ];
+}
+
+async function fetchJiraReleaseOptions(settings = {}, issues = []) {
+  const projectKey = String(settings.jiraProjectKey || process.env.JIRA_PROJECT_KEY || '').trim();
+
+  if (!projectKey) {
+    return buildReleaseOptions(issues);
+  }
+
+  const versions = await requestJson(
+    route`/rest/api/3/project/${projectKey}/versions`,
+    {},
+    'jira'
+  );
+
+  if (!Array.isArray(versions)) {
+    return buildReleaseOptions(issues);
+  }
+
+  const seen = new Map();
+  for (const version of versions) {
+    const name = String(version?.name || version?.id || '').trim();
+    if (!name) {
+      continue;
+    }
+
+    if (!seen.has(name)) {
+      seen.set(name, {
+        id: name,
+        name,
+      });
     }
   }
 
@@ -290,6 +411,31 @@ function compactIssueRecord(record) {
   };
 }
 
+function stripHtml(value) {
+  return String(value || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function compactConfluencePage(page) {
+  const spaceKey = String(page?.space?.key || '').trim();
+  const bodyText = stripHtml(page?.body?.storage?.value || page?.excerpt || '');
+
+  return {
+    id: String(page?.id || ''),
+    title: page?.title || '',
+    spaceKey,
+    bodyText: bodyText.slice(0, 1200),
+  };
+}
+
 function extractOpenAiText(data) {
   if (typeof data?.output_text === 'string' && data.output_text.trim()) {
     return data.output_text.trim();
@@ -314,7 +460,15 @@ function extractOpenAiText(data) {
   return parts.join('\n').trim();
 }
 
-async function summarizeWithOpenAI({ summary, metrics, workstreams, actions, records, sourceLinks }) {
+async function summarizeWithOpenAI({
+  summary,
+  metrics,
+  workstreams,
+  actions,
+  records,
+  confluencePages,
+  sourceLinks,
+}) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return null;
@@ -352,6 +506,9 @@ async function summarizeWithOpenAI({ summary, metrics, workstreams, actions, rec
                 workstreams,
                 actions,
                 records: Array.isArray(records) ? records.map(compactIssueRecord) : [],
+                confluencePages: Array.isArray(confluencePages)
+                  ? confluencePages.map(compactConfluencePage)
+                  : [],
                 sourceLinks,
               },
               null,
@@ -390,47 +547,80 @@ async function summarizeWithOpenAI({ summary, metrics, workstreams, actions, rec
   }
 }
 
-async function fetchConfluenceSnapshot(settings = {}) {
-  const pageId = String(settings.confluencePageId || '').trim();
-  const cql = String(settings.confluenceCql || '').trim();
+async function fetchConfluenceSpaces() {
+  const payload = await requestJson(route`/wiki/api/v2/spaces?limit=${100}`, {}, 'confluence');
+  const seen = new Map();
 
-  if (!pageId && !cql) {
+  for (const space of Array.isArray(payload.results) ? payload.results : []) {
+    const key = String(space?.key || '').trim();
+    const name = String(space?.name || key || 'Space').trim();
+
+    if (!key || seen.has(key)) {
+      continue;
+    }
+
+    seen.set(key, {
+      id: key,
+      name: `${name} (${key})`,
+    });
+  }
+
+  return [
+    { id: '', name: 'Select a Confluence Space' },
+    ...Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name)),
+  ];
+}
+
+async function fetchConfluenceSnapshot(confluenceSpaceKey = '') {
+  const spaceKey = String(confluenceSpaceKey || '').trim();
+
+  if (!spaceKey) {
     return {
       pages: [],
       source: null,
     };
   }
 
-  if (pageId) {
-    const page = await requestJson(
-      route`/wiki/rest/api/content/${pageId}?expand=version,space,body.storage`,
-      {},
-      'confluence'
-    );
-    return {
-      pages: [page],
-      source: {
-        pageId,
-        endpoint: `/wiki/rest/api/content/${pageId}`,
-      },
-    };
-  }
+  const cql = `space="${spaceKey}" AND type=page`;
 
   const search = await requestJson(
     route`/wiki/rest/api/search?cql=${cql}&limit=10&expand=version,space`,
     {},
     'confluence'
   );
+
+  const results = Array.isArray(search.results) ? search.results : [];
+  const pageIds = results
+    .map((result) => String(result?.content?.id || result?.id || '').trim())
+    .filter(Boolean)
+    .slice(0, 10);
+
+  const pages = await Promise.all(
+    pageIds.map(async (pageId) => {
+      try {
+        return await requestJson(
+          route`/wiki/rest/api/content/${pageId}?expand=version,space,body.storage`,
+          {},
+          'confluence'
+        );
+      } catch (error) {
+        console.warn(`Failed to fetch Confluence page ${pageId}:`, error);
+        return null;
+      }
+    })
+  );
+
   return {
-    pages: Array.isArray(search.results) ? search.results : [],
+    pages: pages.filter(Boolean),
     source: {
+      spaceKey,
       cql,
       endpoint: '/wiki/rest/api/search',
     },
   };
 }
 
-function buildSourceLinks({ jql, confluenceSnapshot, settings, refreshedAt }) {
+function buildSourceLinks({ jql, confluenceSnapshot, confluenceSpaceKey, refreshedAt }) {
   return {
     jira: {
       system: 'Jira',
@@ -441,12 +631,14 @@ function buildSourceLinks({ jql, confluenceSnapshot, settings, refreshedAt }) {
     },
     confluence: {
       system: 'Confluence',
-      endpoint: confluenceSnapshot?.source?.endpoint || null,
-      cql: settings.confluenceCql || null,
-      pageId: settings.confluencePageId || null,
+      endpoint: confluenceSnapshot?.source?.endpoint || '/wiki/rest/api/search',
+      spaceKey: confluenceSpaceKey || confluenceSnapshot?.source?.spaceKey || null,
+      cql:
+        confluenceSnapshot?.source?.cql ||
+        (confluenceSpaceKey ? `space="${confluenceSpaceKey}" AND type=page` : null),
       transformationSummary: confluenceSnapshot?.pages?.length
-        ? 'Fetched configured executive source pages from Confluence.'
-        : 'No Confluence source was configured, so no Confluence records were included.',
+        ? 'Fetched pages from the selected Confluence space.'
+        : 'No pages were found in the selected Confluence space.',
       lastRefresh: refreshedAt,
     },
     openai: {
@@ -463,28 +655,50 @@ function buildSourceLinks({ jql, confluenceSnapshot, settings, refreshedAt }) {
 resolver.define('getDashboardData', async ({ payload }) => {
   const settings = await readSettings();
   const refreshedAt = new Date().toISOString();
-  const jql = buildJql(payload || {}, settings);
+  const releaseId = String(payload?.releaseId || '').trim();
+  const confluenceSpaceKey = String(payload?.confluenceSpaceKey || '').trim();
+  const team = String(payload?.team || '').trim();
+  const baseFilter = buildJqlFilter({ releaseId, team }, settings);
+  const jql = buildJql({ releaseId, team, view: payload?.view }, settings);
   const issues = await fetchJiraIssues(jql);
-  const confluenceSnapshot = await fetchConfluenceSnapshot(settings);
+  const [confluenceSpaceOptions, releaseOptions] = await Promise.all([
+    fetchConfluenceSpaces(),
+    fetchJiraReleaseOptions(settings, issues),
+  ]);
+  const confluenceSnapshot = await fetchConfluenceSnapshot(confluenceSpaceKey);
 
-  const releaseOptions = buildReleaseOptions(issues);
+  const cardJqlClauses = {
+    ...CARD_JQL_FILTERS,
+    ...(settings.cardJqlClauses || {}),
+  };
+
+  const normalizedRecords = issues.map(normalizeJiraIssue);
+
+  const cardData = {};
+  for (const [cardKey, extraClause] of Object.entries(cardJqlClauses)) {
+    if (!extraClause) {
+      cardData[cardKey] = { records: normalizedRecords, jql };
+      continue;
+    }
+
+    const cardJql = buildCardJql(baseFilter, extraClause, payload?.view);
+    const cardIssues = await fetchJiraIssues(cardJql);
+    cardData[cardKey] = {
+      records: cardIssues.map(normalizeJiraIssue),
+      jql: cardJql,
+    };
+  }
+
   const teamOptions = buildTeamOptions(issues, settings);
   const metrics = buildMetrics(issues);
   const workstreams = buildWorkstreams(issues);
   const actions = buildActions(issues);
-  const sourceLinks = buildSourceLinks({ jql, confluenceSnapshot, settings, refreshedAt });
-  const normalizedRecords = issues.map((issue) => ({
-    issueKey: issue?.key || '',
-    issueType: issue?.fields?.issuetype?.name || 'Issue',
-    summary: issue?.fields?.summary || 'No summary',
-    status: issue?.fields?.status?.name || 'Unknown',
-    owner:
-      issue?.fields?.assignee?.displayName ||
-      issue?.fields?.reporter?.displayName ||
-      'Unassigned',
-    risk: { label: 'unknown' },
-    confidence: { label: 'unknown' },
-  }));
+  const sourceLinks = buildSourceLinks({
+    jql,
+    confluenceSnapshot,
+    confluenceSpaceKey,
+    refreshedAt,
+  });
   const aiSummary = await summarizeWithOpenAI({
     summary: {
       total: issues.length,
@@ -492,16 +706,19 @@ resolver.define('getDashboardData', async ({ payload }) => {
       jql,
       refreshedAt,
       sourceSystem: 'Jira',
+      confluenceSpaceKey: confluenceSpaceKey || null,
     },
     metrics,
     workstreams,
     actions,
     records: normalizedRecords.slice(0, 25),
+    confluencePages: confluenceSnapshot.pages.slice(0, 10),
     sourceLinks,
   });
 
   return {
     releaseOptions,
+    confluenceSpaceOptions,
     teamOptions,
     viewOptions: DEFAULT_VIEW_OPTIONS,
     issues,
@@ -526,6 +743,8 @@ resolver.define('getDashboardData', async ({ payload }) => {
         issues: issues.length,
       },
       sourceLinks,
+      records: normalizedRecords,
+      cardData,
       cardStates: {
         jira: issues.length > 0 ? 'loaded' : 'empty',
         confluence: confluenceSnapshot.pages.length > 0 ? 'loaded' : 'empty',

@@ -1,7 +1,7 @@
 export const dashboardTemplate = {
   filters: {
     releaseId: '',
-    team: '',
+    confluenceSpaceKey: '',
     view: 'Executive',
   },
   summary: {
@@ -32,9 +32,12 @@ export const dashboardTemplate = {
   sourceLinks: {
     jira: null,
     confluence: null,
+    openai: null,
   },
+  cardData: {},
   cardStates: {
     jira: 'loading',
     confluence: 'loading',
+    openai: 'loading',
   },
 };

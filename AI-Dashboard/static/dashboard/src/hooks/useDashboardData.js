@@ -3,8 +3,9 @@ import { dashboardTemplate } from '../templates/dashboardTemplate';
 import { getDashboardData } from '../services/jiraService';
 
 const DEFAULT_RELEASE_OPTIONS = [{ id: '', name: 'Select a release' }];
-const DEFAULT_TEAM_OPTIONS = [{ id: '', name: 'Select a team' }];
-const DEFAULT_VIEW_OPTIONS = ['Executive', 'Team', 'Release'];
+const DEFAULT_CONFLUENCE_SPACE_OPTIONS = [
+  { id: '', name: 'Select a Confluence Space' },
+];
 
 function normalizeJiraIssue(issue) {
   const fields = issue?.fields || {};
@@ -119,11 +120,22 @@ function getErrorMessage(error) {
     return '';
   }
 
-  if (typeof error === 'string') {
-    return error;
+  const message =
+    typeof error === 'string'
+      ? error
+      : error instanceof Error
+      ? error.message
+      : error?.message ||
+        (typeof error?.toString === 'function'
+          ? String(error.toString())
+          : 'Unable to load dashboard data.');
+
+  const normalized = String(message).trim();
+  if (!normalized || normalized === 'undefined' || normalized === '[object Undefined]') {
+    return 'Unable to load dashboard data.';
   }
 
-  return error?.message || 'Unable to load dashboard data.';
+  return normalized;
 }
 
 export default function useDashboardData() {
@@ -133,8 +145,9 @@ export default function useDashboardData() {
   const [dashboard, setDashboard] = useState(dashboardTemplate);
 
   const [releaseOptions, setReleaseOptions] = useState(DEFAULT_RELEASE_OPTIONS);
-  const [teamOptions, setTeamOptions] = useState(DEFAULT_TEAM_OPTIONS);
-  const [viewOptions, setViewOptions] = useState(DEFAULT_VIEW_OPTIONS);
+  const [confluenceSpaceOptions, setConfluenceSpaceOptions] = useState(
+    DEFAULT_CONFLUENCE_SPACE_OPTIONS
+  );
 
   const requestIdRef = useRef(0);
 
@@ -155,6 +168,10 @@ export default function useDashboardData() {
       const effectiveConfig = {
         ...config,
         ...overrideConfig,
+        releaseId: String((overrideConfig.releaseId ?? config.releaseId) || '').trim(),
+        confluenceSpaceKey: String(
+          (overrideConfig.confluenceSpaceKey ?? config.confluenceSpaceKey) || ''
+        ).trim(),
       };
 
       setLoading(true);
@@ -163,7 +180,8 @@ export default function useDashboardData() {
       try {
         const response = await getDashboardData({
           releaseId: effectiveConfig.releaseId,
-          team: effectiveConfig.team,
+          team: effectiveConfig.team || '',
+          confluenceSpaceKey: effectiveConfig.confluenceSpaceKey,
           view: effectiveConfig.view,
         });
 
@@ -175,20 +193,15 @@ export default function useDashboardData() {
           ? response.releaseOptions
           : DEFAULT_RELEASE_OPTIONS;
 
-        const nextTeamOptions = Array.isArray(response?.teamOptions)
-          ? response.teamOptions
-          : DEFAULT_TEAM_OPTIONS;
-
-        const nextViewOptions = Array.isArray(response?.viewOptions)
-          ? response.viewOptions
-          : DEFAULT_VIEW_OPTIONS;
+        const nextConfluenceSpaceOptions = Array.isArray(response?.confluenceSpaceOptions)
+          ? response.confluenceSpaceOptions
+          : DEFAULT_CONFLUENCE_SPACE_OPTIONS;
 
         const rawIssues = Array.isArray(response?.issues) ? response.issues : [];
         const normalizedRecords = rawIssues.map(normalizeJiraIssue);
 
         setReleaseOptions(nextReleaseOptions);
-        setTeamOptions(nextTeamOptions);
-        setViewOptions(nextViewOptions);
+        setConfluenceSpaceOptions(nextConfluenceSpaceOptions);
         setDashboard(mergeDashboard(response, normalizedRecords));
       } catch (caughtError) {
         if (requestId !== requestIdRef.current) {
@@ -219,7 +232,6 @@ export default function useDashboardData() {
     resetConfig,
     refresh,
     releaseOptions,
-    teamOptions,
-    viewOptions,
+    confluenceSpaceOptions,
   };
 }
