@@ -139,7 +139,7 @@ function getErrorMessage(error) {
 }
 
 export default function useDashboardData() {
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [config, setConfig] = useState(dashboardTemplate.filters);
   const [dashboard, setDashboard] = useState(dashboardTemplate);
@@ -163,7 +163,7 @@ export default function useDashboardData() {
   }, []);
 
   const refresh = useCallback(
-    async (overrideConfig = {}) => {
+    async (overrideConfig = {}, { showLoading = false } = {}) => {
       const requestId = ++requestIdRef.current;
       const effectiveConfig = {
         ...config,
@@ -174,7 +174,9 @@ export default function useDashboardData() {
         ).trim(),
       };
 
-      setLoading(true);
+      if (showLoading) {
+        setLoading(true);
+      }
       setError('');
 
       try {
@@ -211,7 +213,7 @@ export default function useDashboardData() {
         console.error('Failed to load dashboard data:', caughtError);
         setError(getErrorMessage(caughtError));
       } finally {
-        if (requestId === requestIdRef.current) {
+        if (requestId === requestIdRef.current && showLoading) {
           setLoading(false);
         }
       }
@@ -220,7 +222,7 @@ export default function useDashboardData() {
   );
 
   useEffect(() => {
-    refresh();
+    refresh({}, { showLoading: false });
   }, [refresh]);
 
   return {
