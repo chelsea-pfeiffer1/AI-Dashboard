@@ -39,6 +39,29 @@ const CARD_JQL_FILTERS = {
   sourceLinks: '',
 };
 
+function normalizeError(error) {
+  if (error instanceof Error) {
+    return error;
+  }
+
+  if (typeof error === 'string' && error.trim()) {
+    return new Error(error);
+  }
+
+  if (error && typeof error.message === 'string' && error.message.trim()) {
+    return new Error(error.message);
+  }
+
+  if (error && typeof error.toString === 'function') {
+    const text = String(error.toString()).trim();
+    if (text && text !== '[object Object]' && text !== '[object Undefined]' && text !== 'undefined') {
+      return new Error(text);
+    }
+  }
+
+  return new Error('Failed to load dashboard data');
+}
+
 function escapeJqlValue(value) {
   return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
@@ -653,105 +676,109 @@ function buildSourceLinks({ jql, confluenceSnapshot, confluenceSpaceKey, refresh
 }
 
 resolver.define('getDashboardData', async ({ payload }) => {
-  const settings = await readSettings();
-  const refreshedAt = new Date().toISOString();
-  const releaseId = String(payload?.releaseId || '').trim();
-  const confluenceSpaceKey = String(payload?.confluenceSpaceKey || '').trim();
-  const team = String(payload?.team || '').trim();
-  const baseFilter = buildJqlFilter({ releaseId, team }, settings);
-  const jql = buildJql({ releaseId, team, view: payload?.view }, settings);
-  const issues = await fetchJiraIssues(jql);
-  const [confluenceSpaceOptions, releaseOptions] = await Promise.all([
-    fetchConfluenceSpaces(),
-    fetchJiraReleaseOptions(settings, issues),
-  ]);
-  const confluenceSnapshot = await fetchConfluenceSnapshot(confluenceSpaceKey);
+  try {
+    const settings = await readSettings();
+    const refreshedAt = new Date().toISOString();
+    const releaseId = String(payload?.releaseId || '').trim();
+    const confluenceSpaceKey = String(payload?.confluenceSpaceKey || '').trim();
+    const team = String(payload?.team || '').trim();
+    const baseFilter = buildJqlFilter({ releaseId, team }, settings);
+    const jql = buildJql({ releaseId, team, view: payload?.view }, settings);
+    const issues = await fetchJiraIssues(jql);
+    const [confluenceSpaceOptions, releaseOptions] = await Promise.all([
+      fetchConfluenceSpaces(),
+      fetchJiraReleaseOptions(settings, issues),
+    ]);
+    const confluenceSnapshot = await fetchConfluenceSnapshot(confluenceSpaceKey);
 
-  const cardJqlClauses = {
-    ...CARD_JQL_FILTERS,
-    ...(settings.cardJqlClauses || {}),
-  };
+    const cardJqlClauses = {
+      ...CARD_JQL_FILTERS,
+      ...(settings.cardJqlClauses || {}),
+    };
 
-  const normalizedRecords = issues.map(normalizeJiraIssue);
+    const normalizedRecords = issues.map(normalizeJiraIssue);
 
-  const cardData = {};
-  for (const [cardKey, extraClause] of Object.entries(cardJqlClauses)) {
-    if (!extraClause) {
-      cardData[cardKey] = { records: normalizedRecords, jql };
-      continue;
+    const cardData = {};
+    for (const [cardKey, extraClause] of Object.entries(cardJqlClauses)) {
+      if (!extraClause) {
+        cardData[cardKey] = { records: normalizedRecords, jql };
+        continue;
+      }
+
+      const cardJql = buildCardJql(baseFilter, extraClause, payload?.view);
+      const cardIssues = await fetchJiraIssues(cardJql);
+      cardData[cardKey] = {
+        records: cardIssues.map(normalizeJiraIssue),
+        jql: cardJql,
+      };
     }
 
-    const cardJql = buildCardJql(baseFilter, extraClause, payload?.view);
-    const cardIssues = await fetchJiraIssues(cardJql);
-    cardData[cardKey] = {
-      records: cardIssues.map(normalizeJiraIssue),
-      jql: cardJql,
-    };
-  }
-
-  const teamOptions = buildTeamOptions(issues, settings);
-  const metrics = buildMetrics(issues);
-  const workstreams = buildWorkstreams(issues);
-  const actions = buildActions(issues);
-  const sourceLinks = buildSourceLinks({
-    jql,
-    confluenceSnapshot,
-    confluenceSpaceKey,
-    refreshedAt,
-  });
-  const aiSummary = await summarizeWithOpenAI({
-    summary: {
-      total: issues.length,
-      visible: issues.length,
+    const teamOptions = buildTeamOptions(issues, settings);
+    const metrics = buildMetrics(issues);
+    const workstreams = buildWorkstreams(issues);
+    const actions = buildActions(issues);
+    const sourceLinks = buildSourceLinks({
       jql,
+      confluenceSnapshot,
+      confluenceSpaceKey,
       refreshedAt,
-      sourceSystem: 'Jira',
-      confluenceSpaceKey: confluenceSpaceKey || null,
-    },
-    metrics,
-    workstreams,
-    actions,
-    records: normalizedRecords.slice(0, 25),
-    confluencePages: confluenceSnapshot.pages.slice(0, 10),
-    sourceLinks,
-  });
-
-  return {
-    releaseOptions,
-    confluenceSpaceOptions,
-    teamOptions,
-    viewOptions: DEFAULT_VIEW_OPTIONS,
-    issues,
-    dashboard: {
+    });
+    const aiSummary = await summarizeWithOpenAI({
       summary: {
         total: issues.length,
         visible: issues.length,
         jql,
         refreshedAt,
         sourceSystem: 'Jira',
+        confluenceSpaceKey: confluenceSpaceKey || null,
       },
       metrics,
       workstreams,
       actions,
-      aiSummary,
-      baselineSnapshot: {
-        sourceSystem: 'Confluence',
-        pages: confluenceSnapshot.pages.length,
-      },
-      committedScope: {
-        sourceSystem: 'Jira',
-        issues: issues.length,
-      },
+      records: normalizedRecords.slice(0, 25),
+      confluencePages: confluenceSnapshot.pages.slice(0, 10),
       sourceLinks,
-      records: normalizedRecords,
-      cardData,
-      cardStates: {
-        jira: issues.length > 0 ? 'loaded' : 'empty',
-        confluence: confluenceSnapshot.pages.length > 0 ? 'loaded' : 'empty',
-        openai: aiSummary ? 'loaded' : 'empty',
+    });
+
+    return {
+      releaseOptions,
+      confluenceSpaceOptions,
+      teamOptions,
+      viewOptions: DEFAULT_VIEW_OPTIONS,
+      issues,
+      dashboard: {
+        summary: {
+          total: issues.length,
+          visible: issues.length,
+          jql,
+          refreshedAt,
+          sourceSystem: 'Jira',
+        },
+        metrics,
+        workstreams,
+        actions,
+        aiSummary,
+        baselineSnapshot: {
+          sourceSystem: 'Confluence',
+          pages: confluenceSnapshot.pages.length,
+        },
+        committedScope: {
+          sourceSystem: 'Jira',
+          issues: issues.length,
+        },
+        sourceLinks,
+        records: normalizedRecords,
+        cardData,
+        cardStates: {
+          jira: issues.length > 0 ? 'loaded' : 'empty',
+          confluence: confluenceSnapshot.pages.length > 0 ? 'loaded' : 'empty',
+          openai: aiSummary ? 'loaded' : 'empty',
+        },
       },
-    },
-  };
+    };
+  } catch (error) {
+    throw normalizeError(error);
+  }
 });
 
 module.exports.handler = resolver.getDefinitions();
