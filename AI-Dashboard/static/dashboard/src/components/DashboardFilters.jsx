@@ -17,58 +17,10 @@ function FieldLabel({ children }) {
   );
 }
 
-function Select({ value, onChange, options, disabled, ariaLabel }) {
-  return (
-    <select
-      aria-label={ariaLabel}
-      value={value}
-      disabled={disabled}
-      onChange={(event) => onChange(event.target.value)}
-      style={{
-        width: '100%',
-        minHeight: 40,
-        borderRadius: 10,
-        border: '1px solid rgba(148, 163, 184, 0.25)',
-        background: '#0f172a',
-        color: '#e2e8f0',
-        padding: '0 12px',
-        outline: 'none',
-      }}
-    >
-      {options.map((option) => {
-        const id = typeof option === 'string' ? option : option.id;
-        const name = typeof option === 'string' ? option : option.name;
-        return (
-          <option key={id || name} value={id}>
-            {name}
-          </option>
-        );
-      })}
-    </select>
-  );
-}
-
 export default function DashboardFilters({
-  config,
-  updateConfig,
-  resetConfig,
   refresh,
-  releaseOptions = [],
-  confluenceSpaceOptions = [],
   dashboard,
 }) {
-  const handleApply = () => {
-    refresh(config);
-  };
-
-  const handleReset = () => {
-    resetConfig();
-    refresh({
-      releaseId: '',
-      confluenceSpaceKey: '',
-      view: 'Executive',
-    });
-  };
 
   return (
     <section
@@ -93,90 +45,64 @@ export default function DashboardFilters({
       >
         <div>
           <div style={{ fontSize: 18, fontWeight: 700, color: '#f8fafc' }}>
-            Filters
+            Live dashboard settings
           </div>
           <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 4 }}>
             Live source: Jira{dashboard?.sourceLinks?.confluence ? ' and Confluence' : ''}
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            onClick={handleReset}
-            style={{
-              minHeight: 40,
-              borderRadius: 10,
-              border: '1px solid rgba(148, 163, 184, 0.25)',
-              background: 'transparent',
-              color: '#e2e8f0',
-              padding: '0 14px',
-              cursor: 'pointer',
-            }}
-          >
-            Reset
-          </button>
-          <button
-            type="button"
-            onClick={handleApply}
-            style={{
-              minHeight: 40,
-              borderRadius: 10,
-              border: '1px solid rgba(59, 130, 246, 0.5)',
-              background: '#2563eb',
-              color: '#fff',
-              padding: '0 16px',
-              cursor: 'pointer',
-              fontWeight: 700,
-            }}
-          >
-            Apply
-          </button>
-          <button
-            type="button"
-            onClick={() => refresh()}
-            style={{
-              minHeight: 40,
-              borderRadius: 10,
-              border: '1px solid rgba(148, 163, 184, 0.25)',
-              background: '#111827',
-              color: '#e2e8f0',
-              padding: '0 14px',
-              cursor: 'pointer',
-            }}
-          >
-            Refresh
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={() => refresh()}
+          style={{
+            minHeight: 40,
+            borderRadius: 10,
+            border: '1px solid rgba(59, 130, 246, 0.5)',
+            background: '#2563eb',
+            color: '#fff',
+            padding: '0 16px',
+            cursor: 'pointer',
+            fontWeight: 700,
+          }}
+        >
+          Refresh
+        </button>
       </div>
 
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
           gap: 16,
         }}
       >
-        <div>
-          <FieldLabel>Select a Release</FieldLabel>
-          <Select
-            ariaLabel="Release"
-            value={config.releaseId}
-            onChange={(value) => updateConfig({ releaseId: value })}
-            options={releaseOptions}
-            disabled={releaseOptions.length === 0}
-          />
+        <div
+          style={{
+            padding: 16,
+            borderRadius: 12,
+            background: 'rgba(15, 23, 42, 0.92)',
+            border: '1px solid rgba(148, 163, 184, 0.15)',
+          }}
+        >
+          <FieldLabel>Release</FieldLabel>
+          <div style={{ fontSize: 14, color: '#e2e8f0' }}>
+            VMS v26.06.00 (GA: 7/30)
+          </div>
         </div>
 
-        <div>
-          <FieldLabel>Select a Confluence Space</FieldLabel>
-          <Select
-            ariaLabel="Confluence Space"
-            value={config.confluenceSpaceKey}
-            onChange={(value) => updateConfig({ confluenceSpaceKey: value })}
-            options={confluenceSpaceOptions}
-            disabled={confluenceSpaceOptions.length === 0}
-          />
+        <div
+          style={{
+            padding: 16,
+            borderRadius: 12,
+            background: 'rgba(15, 23, 42, 0.92)',
+            border: '1px solid rgba(148, 163, 184, 0.15)',
+          }}
+        >
+          <FieldLabel>Confluence Space</FieldLabel>
+          <div style={{ fontSize: 14, color: '#e2e8f0' }}>
+            Locked to a single configured space
+          </div>
         </div>
       </div>
     </section>

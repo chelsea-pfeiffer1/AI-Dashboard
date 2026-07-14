@@ -1,5 +1,5 @@
 export const sourceConfig = {
-  defaultReleaseId: 'VMSv26.05.00',
+  defaultReleaseId: 'VMSv26.06.00',
   defaultTeam: 'Executive',
   defaultView: 'Executive',
 };

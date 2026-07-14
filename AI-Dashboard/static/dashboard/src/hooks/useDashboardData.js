@@ -2,10 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { dashboardTemplate } from '../templates/dashboardTemplate';
 import { getDashboardData } from '../services/jiraService';
 
-const DEFAULT_RELEASE_OPTIONS = [{ id: '', name: 'Select a release' }];
-const DEFAULT_CONFLUENCE_SPACE_OPTIONS = [
-  { id: '', name: 'Select a Confluence Space' },
-];
+const FIXED_RELEASE_ID = 'VMSv26.06.00';
+const FIXED_CONFLUENCE_SPACE_KEY = String(process.env.REACT_APP_CONFLUENCE_SPACE_KEY || '').trim();
 
 function normalizeJiraIssue(issue) {
   const fields = issue?.fields || {};
@@ -141,37 +139,17 @@ function getErrorMessage(error) {
 export default function useDashboardData() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [config, setConfig] = useState(dashboardTemplate.filters);
+  const [consentAcknowledged, setConsentAcknowledged] = useState(false);
   const [dashboard, setDashboard] = useState(dashboardTemplate);
-
-  const [releaseOptions, setReleaseOptions] = useState(DEFAULT_RELEASE_OPTIONS);
-  const [confluenceSpaceOptions, setConfluenceSpaceOptions] = useState(
-    DEFAULT_CONFLUENCE_SPACE_OPTIONS
-  );
-
   const requestIdRef = useRef(0);
-
-  const updateConfig = useCallback((patch) => {
-    setConfig((current) => ({
-      ...current,
-      ...patch,
-    }));
-  }, []);
-
-  const resetConfig = useCallback(() => {
-    setConfig(dashboardTemplate.filters);
-  }, []);
 
   const refresh = useCallback(
     async (overrideConfig = {}, { showLoading = false } = {}) => {
       const requestId = ++requestIdRef.current;
       const effectiveConfig = {
-        ...config,
+        releaseId: FIXED_RELEASE_ID,
+        confluenceSpaceKey: FIXED_CONFLUENCE_SPACE_KEY,
         ...overrideConfig,
-        releaseId: String((overrideConfig.releaseId ?? config.releaseId) || '').trim(),
-        confluenceSpaceKey: String(
-          (overrideConfig.confluenceSpaceKey ?? config.confluenceSpaceKey) || ''
-        ).trim(),
       };
 
       if (showLoading) {
@@ -191,19 +169,8 @@ export default function useDashboardData() {
           return;
         }
 
-        const nextReleaseOptions = Array.isArray(response?.releaseOptions)
-          ? response.releaseOptions
-          : DEFAULT_RELEASE_OPTIONS;
-
-        const nextConfluenceSpaceOptions = Array.isArray(response?.confluenceSpaceOptions)
-          ? response.confluenceSpaceOptions
-          : DEFAULT_CONFLUENCE_SPACE_OPTIONS;
-
         const rawIssues = Array.isArray(response?.issues) ? response.issues : [];
         const normalizedRecords = rawIssues.map(normalizeJiraIssue);
-
-        setReleaseOptions(nextReleaseOptions);
-        setConfluenceSpaceOptions(nextConfluenceSpaceOptions);
         setDashboard(mergeDashboard(response, normalizedRecords));
       } catch (caughtError) {
         if (requestId !== requestIdRef.current) {
@@ -218,22 +185,21 @@ export default function useDashboardData() {
         }
       }
     },
-    [config]
+    []
   );
 
   useEffect(() => {
+    if (!consentAcknowledged) {
+      setConsentAcknowledged(true);
+    }
     refresh({}, { showLoading: false });
-  }, [refresh]);
+  }, [consentAcknowledged, refresh]);
 
   return {
     loading,
     error,
-    config,
+    consentAcknowledged,
     dashboard,
-    updateConfig,
-    resetConfig,
     refresh,
-    releaseOptions,
-    confluenceSpaceOptions,
   };
 }

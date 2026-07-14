@@ -17,13 +17,9 @@ export default function App() {
   const {
     loading,
     error,
-    config,
+    consentAcknowledged,
     dashboard,
-    updateConfig,
-    resetConfig,
     refresh,
-    releaseOptions,
-    confluenceSpaceOptions,
   } = useDashboardData();
 
   if (loading) {
@@ -42,6 +38,29 @@ export default function App() {
     >
       <div style={{ maxWidth: 1600, margin: '0 auto' }}>
         <DashboardHeader dashboard={dashboard} />
+
+        <div
+          style={{
+            margin: '16px 0 24px',
+            border: '1px solid rgba(148, 163, 184, 0.3)',
+            background: 'rgba(15, 23, 42, 0.8)',
+            color: '#cbd5e1',
+            borderRadius: 12,
+            padding: '14px 16px',
+            fontSize: 14,
+            lineHeight: 1.5,
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 4, color: '#f8fafc' }}>
+            Jira connection consent
+          </div>
+          <div>
+            Using this dashboard automatically connects to Jira to read live issue data. By using the dashboard, you consent to that connection and the data access required to render the live view.
+          </div>
+          {consentAcknowledged ? (
+            <div style={{ marginTop: 8, color: '#86efac' }}>Connection initiated automatically.</div>
+          ) : null}
+        </div>
 
         {error ? (
           <div
@@ -80,15 +99,7 @@ export default function App() {
           </div>
         ) : null}
 
-        <DashboardFilters
-          config={config}
-          updateConfig={updateConfig}
-          resetConfig={resetConfig}
-          refresh={refresh}
-          releaseOptions={releaseOptions}
-          confluenceSpaceOptions={confluenceSpaceOptions}
-          dashboard={dashboard}
-        />
+        <DashboardFilters refresh={refresh} dashboard={dashboard} />
 
         <DashboardMetrics dashboard={dashboard} />
 

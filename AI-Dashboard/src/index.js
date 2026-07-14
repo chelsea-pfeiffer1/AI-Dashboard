@@ -10,6 +10,9 @@ const resolver = new Resolver();
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.5';
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 20000);
 
+const FIXED_RELEASE_ID = 'VMSv26.06.00';
+const FIXED_CONFLUENCE_SPACE_KEY = String(process.env.CONFLUENCE_SPACE_KEY || '').trim();
+
 const DEFAULT_RELEASE_OPTIONS = [{ id: '', name: 'Select a release' }];
 const DEFAULT_TEAM_OPTIONS = [{ id: '', name: 'Select a team' }];
 const DEFAULT_VIEW_OPTIONS = ['Executive', 'Team', 'Release'];
@@ -182,18 +185,37 @@ async function readSettings() {
 }
 
 async function requestJson(path, requestOptions = {}, product = 'jira') {
-  const client =
+  const appClient =
+    product === 'confluence' ? api.asApp().requestConfluence : api.asApp().requestJira;
+  const userClient =
     product === 'confluence' ? api.asUser().requestConfluence : api.asUser().requestJira;
-  const response = await client(path, requestOptions);
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(
-      `${product} request failed: ${response.status} ${response.statusText} ${body}`
-    );
+  const parseResponse = async (client) => {
+    const response = await client(path, requestOptions);
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(
+        `${product} request failed: ${response.status} ${response.statusText} ${body}`
+      );
+    }
+
+    return response.json();
+  };
+
+  try {
+    return await parseResponse(appClient);
+  } catch (appError) {
+    try {
+      return await parseResponse(userClient);
+    } catch (userError) {
+      const message = userError instanceof Error ? userError.message : String(userError || '');
+      if (message) {
+        throw new Error(message);
+      }
+      throw appError;
+    }
   }
-
-  return response.json();
 }
 
 async function fetchJiraIssues(jql) {
@@ -576,27 +598,32 @@ async function summarizeWithOpenAI({
 }
 
 async function fetchConfluenceSpaces() {
-  const payload = await requestJson(route`/wiki/api/v2/spaces?limit=${100}`, {}, 'confluence');
-  const seen = new Map();
+  try {
+    const payload = await requestJson(route`/wiki/api/v2/spaces?limit=${100}`, {}, 'confluence');
+    const seen = new Map();
 
-  for (const space of Array.isArray(payload.results) ? payload.results : []) {
-    const key = String(space?.key || '').trim();
-    const name = String(space?.name || key || 'Space').trim();
+    for (const space of Array.isArray(payload.results) ? payload.results : []) {
+      const key = String(space?.key || '').trim();
+      const name = String(space?.name || key || 'Space').trim();
 
-    if (!key || seen.has(key)) {
-      continue;
+      if (!key || seen.has(key)) {
+        continue;
+      }
+
+      seen.set(key, {
+        id: key,
+        name: `${name} (${key})`,
+      });
     }
 
-    seen.set(key, {
-      id: key,
-      name: `${name} (${key})`,
-    });
+    return [
+      { id: '', name: 'Select a Confluence Space' },
+      ...Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name)),
+    ];
+  } catch (error) {
+    console.warn('Unable to load Confluence spaces; continuing without Confluence access.', error);
+    return [{ id: '', name: 'Select a Confluence Space' }];
   }
-
-  return [
-    { id: '', name: 'Select a Confluence Space' },
-    ...Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name)),
-  ];
 }
 
 async function fetchConfluenceSnapshot(confluenceSpaceKey = '') {
@@ -609,43 +636,51 @@ async function fetchConfluenceSnapshot(confluenceSpaceKey = '') {
     };
   }
 
-  const cql = `space="${spaceKey}" AND type=page`;
+  try {
+    const cql = `space="${spaceKey}" AND type=page`;
 
-  const search = await requestJson(
-    route`/wiki/rest/api/search?cql=${cql}&limit=10&expand=version,space`,
-    {},
-    'confluence'
-  );
+    const search = await requestJson(
+      route`/wiki/rest/api/search?cql=${cql}&limit=10&expand=version,space`,
+      {},
+      'confluence'
+    );
 
-  const results = Array.isArray(search.results) ? search.results : [];
-  const pageIds = results
-    .map((result) => String(result?.content?.id || result?.id || '').trim())
-    .filter(Boolean)
-    .slice(0, 10);
+    const results = Array.isArray(search.results) ? search.results : [];
+    const pageIds = results
+      .map((result) => String(result?.content?.id || result?.id || '').trim())
+      .filter(Boolean)
+      .slice(0, 10);
 
-  const pages = await Promise.all(
-    pageIds.map(async (pageId) => {
-      try {
-        return await requestJson(
-          route`/wiki/rest/api/content/${pageId}?expand=version,space,body.storage`,
-          {},
-          'confluence'
-        );
-      } catch (error) {
-        console.warn(`Failed to fetch Confluence page ${pageId}:`, error);
-        return null;
-      }
-    })
-  );
+    const pages = await Promise.all(
+      pageIds.map(async (pageId) => {
+        try {
+          return await requestJson(
+            route`/wiki/rest/api/content/${pageId}?expand=version,space,body.storage`,
+            {},
+            'confluence'
+          );
+        } catch (error) {
+          console.warn(`Failed to fetch Confluence page ${pageId}:`, error);
+          return null;
+        }
+      })
+    );
 
-  return {
-    pages: pages.filter(Boolean),
-    source: {
-      spaceKey,
-      cql,
-      endpoint: '/wiki/rest/api/search',
-    },
-  };
+    return {
+      pages: pages.filter(Boolean),
+      source: {
+        spaceKey,
+        cql,
+        endpoint: '/wiki/rest/api/search',
+      },
+    };
+  } catch (error) {
+    console.warn('Unable to load Confluence snapshot; continuing without Confluence data.', error);
+    return {
+      pages: [],
+      source: null,
+    };
+  }
 }
 
 function buildSourceLinks({ jql, confluenceSnapshot, confluenceSpaceKey, refreshedAt }) {
@@ -680,13 +715,83 @@ function buildSourceLinks({ jql, confluenceSnapshot, confluenceSpaceKey, refresh
   };
 }
 
+function isAuthenticationError(error) {
+  const message = String(error?.message || error || '').toLowerCase();
+  return (
+    message.includes('authentication required') ||
+    message.includes('unauthorized') ||
+    message.includes('forbidden') ||
+    message.includes('401') ||
+    message.includes('403')
+  );
+}
+
+function buildEmptyDashboardResponse({ settings = {}, payload = {}, refreshedAt = new Date().toISOString() } = {}) {
+  const releaseId = FIXED_RELEASE_ID;
+  const confluenceSpaceKey = FIXED_CONFLUENCE_SPACE_KEY || String(payload?.confluenceSpaceKey || '').trim();
+  const team = String(payload?.team || '').trim();
+  const jql = buildJql({ releaseId, team, view: payload?.view }, settings);
+  const confluenceSnapshot = { pages: [], source: null };
+  const sourceLinks = buildSourceLinks({
+    jql,
+    confluenceSnapshot,
+    confluenceSpaceKey,
+    refreshedAt,
+  });
+
+  return {
+    releaseOptions: DEFAULT_RELEASE_OPTIONS,
+    confluenceSpaceOptions: [{ id: '', name: 'Select a Confluence Space' }],
+    teamOptions: DEFAULT_TEAM_OPTIONS,
+    viewOptions: DEFAULT_VIEW_OPTIONS,
+    issues: [],
+    dashboard: {
+      summary: {
+        total: 0,
+        visible: 0,
+        jql,
+        refreshedAt,
+        sourceSystem: 'Jira',
+      },
+      metrics: {
+        highRisk: 0,
+        mediumRisk: 0,
+        blockers: 0,
+        decisionsNeeded: 0,
+      },
+      workstreams: [],
+      actions: [],
+      aiSummary: null,
+      baselineSnapshot: {
+        sourceSystem: 'Confluence',
+        pages: 0,
+      },
+      committedScope: {
+        sourceSystem: 'Jira',
+        issues: 0,
+      },
+      sourceLinks,
+      records: [],
+      cardData: {},
+      cardStates: {
+        jira: 'empty',
+        confluence: 'empty',
+        openai: 'empty',
+      },
+    },
+  };
+}
+
 resolver.define('getDashboardData', async ({ payload }) => {
+  let settings = {};
+  let refreshedAt = new Date().toISOString();
+  const releaseId = FIXED_RELEASE_ID;
+  const confluenceSpaceKey = FIXED_CONFLUENCE_SPACE_KEY || String(payload?.confluenceSpaceKey || '').trim();
+  const team = String(payload?.team || '').trim();
+
   try {
-    const settings = await readSettings();
-    const refreshedAt = new Date().toISOString();
-    const releaseId = String(payload?.releaseId || '').trim();
-    const confluenceSpaceKey = String(payload?.confluenceSpaceKey || '').trim();
-    const team = String(payload?.team || '').trim();
+    settings = await readSettings();
+    refreshedAt = new Date().toISOString();
     const baseFilter = buildJqlFilter({ releaseId, team }, settings);
     const jql = buildJql({ releaseId, team, view: payload?.view }, settings);
     const issues = await fetchJiraIssues(jql);
@@ -787,6 +892,10 @@ resolver.define('getDashboardData', async ({ payload }) => {
       },
     };
   } catch (error) {
+    if (isAuthenticationError(error)) {
+      return buildEmptyDashboardResponse({ settings, payload, refreshedAt });
+    }
+
     throw normalizeError(error);
   }
 });
