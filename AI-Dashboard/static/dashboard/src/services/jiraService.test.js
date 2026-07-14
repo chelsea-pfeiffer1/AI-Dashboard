@@ -26,4 +26,12 @@ describe('jiraService', () => {
       getDashboardData({ releaseId: '', team: '', confluenceSpaceKey: '', view: 'Executive' })
     ).rejects.toBe(expectedError);
   });
+
+  it('converts plain-object rejections into a friendly Error', async () => {
+    invoke.mockRejectedValueOnce({});
+
+    await expect(
+      getDashboardData({ releaseId: '', team: '', confluenceSpaceKey: '', view: 'Executive' })
+    ).rejects.toThrow('Failed to load dashboard data');
+  });
 });

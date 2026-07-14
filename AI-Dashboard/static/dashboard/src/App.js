@@ -58,9 +58,9 @@ export default function App() {
               gap: 16,
             }}
           >
-            <div>
+            <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 700, marginBottom: 4 }}>Live data unavailable</div>
-              <div style={{ fontSize: 14, lineHeight: 1.4 }}>{error}</div>
+              <div style={{ fontSize: 14, lineHeight: 1.4, whiteSpace: 'pre-wrap' }}>{error}</div>
             </div>
             <button
               type="button"

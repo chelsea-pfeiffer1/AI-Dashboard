@@ -251,35 +251,40 @@ async function fetchJiraReleaseOptions(settings = {}, issues = []) {
     return buildReleaseOptions(issues);
   }
 
-  const versions = await requestJson(
-    route`/rest/api/3/project/${projectKey}/versions`,
-    {},
-    'jira'
-  );
+  try {
+    const versions = await requestJson(
+      route`/rest/api/3/project/${projectKey}/versions`,
+      {},
+      'jira'
+    );
 
-  if (!Array.isArray(versions)) {
+    if (!Array.isArray(versions)) {
+      return buildReleaseOptions(issues);
+    }
+
+    const seen = new Map();
+    for (const version of versions) {
+      const name = String(version?.name || version?.id || '').trim();
+      if (!name) {
+        continue;
+      }
+
+      if (!seen.has(name)) {
+        seen.set(name, {
+          id: name,
+          name,
+        });
+      }
+    }
+
+    return [
+      DEFAULT_RELEASE_OPTIONS[0],
+      ...Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name)),
+    ];
+  } catch (error) {
+    console.warn('Failed to load Jira release options; falling back to issue-derived options.', error);
     return buildReleaseOptions(issues);
   }
-
-  const seen = new Map();
-  for (const version of versions) {
-    const name = String(version?.name || version?.id || '').trim();
-    if (!name) {
-      continue;
-    }
-
-    if (!seen.has(name)) {
-      seen.set(name, {
-        id: name,
-        name,
-      });
-    }
-  }
-
-  return [
-    DEFAULT_RELEASE_OPTIONS[0],
-    ...Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name)),
-  ];
 }
 
 function buildTeamOptions(issues, settings = {}) {
@@ -723,22 +728,27 @@ resolver.define('getDashboardData', async ({ payload }) => {
       confluenceSpaceKey,
       refreshedAt,
     });
-    const aiSummary = await summarizeWithOpenAI({
-      summary: {
-        total: issues.length,
-        visible: issues.length,
-        jql,
-        refreshedAt,
-        sourceSystem: 'Jira',
-        confluenceSpaceKey: confluenceSpaceKey || null,
-      },
-      metrics,
-      workstreams,
-      actions,
-      records: normalizedRecords.slice(0, 25),
-      confluencePages: confluenceSnapshot.pages.slice(0, 10),
-      sourceLinks,
-    });
+    let aiSummary = null;
+    try {
+      aiSummary = await summarizeWithOpenAI({
+        summary: {
+          total: issues.length,
+          visible: issues.length,
+          jql,
+          refreshedAt,
+          sourceSystem: 'Jira',
+          confluenceSpaceKey: confluenceSpaceKey || null,
+        },
+        metrics,
+        workstreams,
+        actions,
+        records: normalizedRecords.slice(0, 25),
+        confluencePages: confluenceSnapshot.pages.slice(0, 10),
+        sourceLinks,
+      });
+    } catch (error) {
+      console.warn('AI summary unavailable; continuing without it.', error);
+    }
 
     return {
       releaseOptions,
