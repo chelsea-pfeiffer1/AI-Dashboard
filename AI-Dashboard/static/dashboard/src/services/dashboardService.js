@@ -6,7 +6,7 @@ export async function getDashboardData({ releaseId, team, confluenceSpaceKey, vi
       releaseId,
       team,
       confluenceSpaceKey,
-      view,
+      view
     });
   } catch (error) {
     if (error instanceof Error) {
@@ -19,13 +19,6 @@ export async function getDashboardData({ releaseId, team, confluenceSpaceKey, vi
 
     if (error && typeof error.message === 'string' && error.message.trim()) {
       throw new Error(error.message);
-    }
-
-    if (error && typeof error.toString === 'function') {
-      const text = String(error.toString()).trim();
-      if (text && text !== '[object Object]' && text !== '[object Undefined]' && text !== 'undefined') {
-        throw new Error(text);
-      }
     }
 
     throw new Error('Failed to load dashboard data');

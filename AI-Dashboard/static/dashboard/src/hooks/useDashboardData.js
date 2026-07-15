@@ -1,116 +1,28 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { dashboardTemplate } from '../templates/dashboardTemplate';
-import { getDashboardData } from '../services/jiraService';
+import { getDashboardData } from '../services/dashboardService';
 
-const FIXED_RELEASE_ID = 'VMSv26.06.00';
-const FIXED_CONFLUENCE_SPACE_KEY = String(process.env.REACT_APP_CONFLUENCE_SPACE_KEY || '').trim();
+const STORAGE_KEY = 'forge-ai-dashboard-config';
 
-function normalizeJiraIssue(issue) {
-  const fields = issue?.fields || {};
-  const summary = fields.summary || 'No summary';
-  const issueType = fields.issuetype?.name || 'Issue';
-  const status = fields.status?.name || 'Unknown';
-  const owner =
-    fields.assignee?.displayName ||
-    fields.reporter?.displayName ||
-    'Unassigned';
-
-  const priority = String(fields.priority?.name || '').toLowerCase();
-  const labels = Array.isArray(fields.labels)
-    ? fields.labels.map((label) => String(label).toLowerCase())
-    : [];
-
-  let risk = 'low';
-  if (
-    priority.includes('highest') ||
-    priority.includes('critical') ||
-    priority.includes('blocker') ||
-    labels.includes('blocker') ||
-    /critical|blocker/i.test(`${summary} ${status}`)
-  ) {
-    risk = 'high';
-  } else if (priority.includes('high') || labels.includes('high')) {
-    risk = 'high';
-  } else if (priority.includes('medium') || labels.includes('medium')) {
-    risk = 'medium';
+function readStoredConfig() {
+  if (typeof window === 'undefined') {
+    return dashboardTemplate.filters;
   }
 
-  let confidence = 'low';
-  if (/done|closed|resolved/i.test(status)) {
-    confidence = 'high';
-  } else if (risk === 'low') {
-    confidence = 'medium';
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      return dashboardTemplate.filters;
+    }
+
+    const parsed = JSON.parse(raw);
+    return {
+      ...dashboardTemplate.filters,
+      ...parsed
+    };
+  } catch {
+    return dashboardTemplate.filters;
   }
-
-  return {
-    issueKey: issue?.key || fields.key || summary,
-    issueType,
-    summary,
-    status,
-    owner,
-    risk: { label: risk },
-    confidence: { label: confidence },
-  };
-}
-
-function buildDerivedMetrics(records) {
-  const highRisk = records.filter((record) => record.risk.label === 'high').length;
-  const mediumRisk = records.filter((record) => record.risk.label === 'medium').length;
-  const blockers = records.filter((record) =>
-    /blocked|blocker/i.test(`${record.status} ${record.summary}`)
-  ).length;
-  const decisionsNeeded = records.filter((record) =>
-    /decision|approve|clarify|confirm/i.test(`${record.status} ${record.summary}`)
-  ).length;
-
-  return { highRisk, mediumRisk, blockers, decisionsNeeded };
-}
-
-function mergeDashboard(response, records) {
-  const derivedMetrics = buildDerivedMetrics(records);
-
-  return {
-    ...dashboardTemplate,
-    ...(response?.dashboard || {}),
-    summary: {
-      ...dashboardTemplate.summary,
-      ...(response?.dashboard?.summary || {}),
-      total: response?.dashboard?.summary?.total ?? records.length,
-      visible: response?.dashboard?.summary?.visible ?? records.length,
-      jql:
-        response?.dashboard?.summary?.jql ||
-        dashboardTemplate.summary?.jql ||
-        '',
-    },
-    metrics: {
-      ...dashboardTemplate.metrics,
-      ...(response?.dashboard?.metrics || {}),
-      ...derivedMetrics,
-    },
-    records,
-    releaseSnapshot: {
-      ...dashboardTemplate.releaseSnapshot,
-      ...(response?.dashboard?.releaseSnapshot || {}),
-    },
-    workstreams: response?.dashboard?.workstreams || dashboardTemplate.workstreams || [],
-    actions: response?.dashboard?.actions || dashboardTemplate.actions || [],
-    baselineSnapshot: {
-      ...dashboardTemplate.baselineSnapshot,
-      ...(response?.dashboard?.baselineSnapshot || {}),
-    },
-    committedScope: {
-      ...dashboardTemplate.committedScope,
-      ...(response?.dashboard?.committedScope || {}),
-    },
-    sourceLinks: {
-      ...dashboardTemplate.sourceLinks,
-      ...(response?.dashboard?.sourceLinks || {}),
-    },
-    cardStates: {
-      ...dashboardTemplate.cardStates,
-      ...(response?.dashboard?.cardStates || {}),
-    },
-  };
 }
 
 function getErrorMessage(error) {
@@ -118,88 +30,157 @@ function getErrorMessage(error) {
     return '';
   }
 
-  const message =
-    typeof error === 'string'
-      ? error
-      : error instanceof Error
-      ? error.message
-      : error?.message ||
-        (typeof error?.toString === 'function'
-          ? String(error.toString())
-          : 'Unable to load dashboard data.');
-
-  const normalized = String(message).trim();
-  if (!normalized || normalized === 'undefined' || normalized === '[object Undefined]') {
-    return 'Unable to load dashboard data.';
+  if (typeof error === 'string') {
+    return error.trim();
   }
 
-  return normalized;
+  if (error instanceof Error) {
+    return error.message.trim();
+  }
+
+  return String(error?.message || error?.toString?.() || 'Unable to load dashboard data').trim();
+}
+
+function mergeDashboard(response) {
+  const nextDashboard = response?.dashboard || {};
+  return {
+    ...dashboardTemplate,
+    ...nextDashboard,
+    summary: {
+      ...dashboardTemplate.summary,
+      ...(nextDashboard.summary || {})
+    },
+    metrics: {
+      ...dashboardTemplate.metrics,
+      ...(nextDashboard.metrics || {})
+    },
+    releaseSnapshot: {
+      ...dashboardTemplate.releaseSnapshot,
+      ...(nextDashboard.releaseSnapshot || {})
+    },
+    baselineSnapshot: {
+      ...dashboardTemplate.baselineSnapshot,
+      ...(nextDashboard.baselineSnapshot || {})
+    },
+    committedScope: {
+      ...dashboardTemplate.committedScope,
+      ...(nextDashboard.committedScope || {})
+    },
+    sourceLinks: {
+      ...dashboardTemplate.sourceLinks,
+      ...(nextDashboard.sourceLinks || {})
+    },
+    cardStates: {
+      ...dashboardTemplate.cardStates,
+      ...(nextDashboard.cardStates || {})
+    },
+    scope: {
+      ...dashboardTemplate.scope,
+      ...(nextDashboard.scope || {})
+    },
+    records: Array.isArray(nextDashboard.records) ? nextDashboard.records : [],
+    workstreams: Array.isArray(nextDashboard.workstreams) ? nextDashboard.workstreams : [],
+    actions: Array.isArray(nextDashboard.actions) ? nextDashboard.actions : [],
+    cardData: nextDashboard.cardData || {},
+    aiSummary: nextDashboard.aiSummary || null
+  };
 }
 
 export default function useDashboardData() {
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [consentAcknowledged, setConsentAcknowledged] = useState(false);
+  const [config, setConfig] = useState(() => readStoredConfig());
   const [dashboard, setDashboard] = useState(dashboardTemplate);
-  const requestIdRef = useRef(0);
+  const [releaseOptions, setReleaseOptions] = useState([{ id: 'VMSv26.06.00', name: 'VMSv26.06.00' }]);
+  const [teamOptions, setTeamOptions] = useState([{ id: 'VMS', name: 'VMS' }]);
+  const [confluenceSpaceOptions, setConfluenceSpaceOptions] = useState([{ id: 'PS', name: 'PS (default)' }]);
+  const [viewOptions] = useState(['Executive', 'Team', 'Release']);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+    } catch {
+      // Ignore storage failures in Forge browser contexts.
+    }
+  }, [config]);
 
   const refresh = useCallback(
     async (overrideConfig = {}, { showLoading = false } = {}) => {
-      const requestId = ++requestIdRef.current;
       const effectiveConfig = {
-        releaseId: FIXED_RELEASE_ID,
-        confluenceSpaceKey: FIXED_CONFLUENCE_SPACE_KEY,
+        ...config,
         ...overrideConfig,
+        releaseId: String((overrideConfig.releaseId ?? config.releaseId) || '').trim(),
+        team: String((overrideConfig.team ?? config.team) || '').trim(),
+        confluenceSpaceKey: String((overrideConfig.confluenceSpaceKey ?? config.confluenceSpaceKey) || '').trim()
       };
 
       if (showLoading) {
         setLoading(true);
       }
+
       setError('');
 
       try {
-        const response = await getDashboardData({
-          releaseId: effectiveConfig.releaseId,
-          team: effectiveConfig.team || '',
-          confluenceSpaceKey: effectiveConfig.confluenceSpaceKey,
-          view: effectiveConfig.view,
-        });
-
-        if (requestId !== requestIdRef.current) {
-          return;
-        }
-
-        const rawIssues = Array.isArray(response?.issues) ? response.issues : [];
-        const normalizedRecords = rawIssues.map(normalizeJiraIssue);
-        setDashboard(mergeDashboard(response, normalizedRecords));
+        const response = await getDashboardData(effectiveConfig);
+        setConfig(effectiveConfig);
+        setDashboard(mergeDashboard(response));
+        setReleaseOptions(Array.isArray(response?.releaseOptions) ? response.releaseOptions : releaseOptions);
+        setTeamOptions(Array.isArray(response?.teamOptions) ? response.teamOptions : teamOptions);
+        setConfluenceSpaceOptions(
+          Array.isArray(response?.confluenceSpaceOptions) ? response.confluenceSpaceOptions : confluenceSpaceOptions
+        );
       } catch (caughtError) {
-        if (requestId !== requestIdRef.current) {
-          return;
-        }
-
-        console.error('Failed to load dashboard data:', caughtError);
         setError(getErrorMessage(caughtError));
       } finally {
-        if (requestId === requestIdRef.current && showLoading) {
+        if (showLoading) {
           setLoading(false);
         }
       }
     },
-    []
+    [config, releaseOptions, teamOptions, confluenceSpaceOptions]
   );
 
-  useEffect(() => {
-    if (!consentAcknowledged) {
-      setConsentAcknowledged(true);
-    }
-    refresh({}, { showLoading: false });
-  }, [consentAcknowledged, refresh]);
+  const updateConfig = useCallback((patch) => {
+    setConfig((current) => ({
+      ...current,
+      ...patch
+    }));
+  }, []);
 
-  return {
-    loading,
-    error,
-    consentAcknowledged,
-    dashboard,
-    refresh,
-  };
+  const resetConfig = useCallback(() => {
+    setConfig(dashboardTemplate.filters);
+  }, []);
+
+  useEffect(() => {
+    refresh({}, { showLoading: true });
+  }, []);
+
+  return useMemo(
+    () => ({
+      loading,
+      error,
+      config,
+      dashboard,
+      updateConfig,
+      resetConfig,
+      refresh,
+      releaseOptions,
+      teamOptions,
+      confluenceSpaceOptions,
+      viewOptions
+    }),
+    [
+      loading,
+      error,
+      config,
+      dashboard,
+      updateConfig,
+      resetConfig,
+      refresh,
+      releaseOptions,
+      teamOptions,
+      confluenceSpaceOptions,
+      viewOptions
+    ]
+  );
 }
