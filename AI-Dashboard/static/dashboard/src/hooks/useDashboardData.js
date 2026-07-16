@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { dashboardTemplate } from '../templates/dashboardTemplate';
 import { getDashboardData } from '../services/dashboardService';
 
-const STORAGE_KEY = 'forge-ai-dashboard-config';
+const STORAGE_KEY = 'forge-ai-dashboard-config-v2';
 
 function readStoredConfig() {
   if (typeof window === 'undefined') {
@@ -91,7 +91,7 @@ export default function useDashboardData() {
   const [error, setError] = useState('');
   const [config, setConfig] = useState(() => readStoredConfig());
   const [dashboard, setDashboard] = useState(dashboardTemplate);
-  const [releaseOptions, setReleaseOptions] = useState([{ id: 'VMSv26.06.00', name: 'VMSv26.06.00' }]);
+  const [releaseOptions, setReleaseOptions] = useState([{ id: 'VMSv26.06.00 (GA: 07/30)', name: 'VMSv26.06.00 (GA: 07/30)' }]);
   const [teamOptions, setTeamOptions] = useState([{ id: 'VMS', name: 'VMS' }]);
   const [confluenceSpaceOptions, setConfluenceSpaceOptions] = useState([{ id: 'PS', name: 'PS (default)' }]);
   const [viewOptions] = useState(['Executive', 'Team', 'Release']);

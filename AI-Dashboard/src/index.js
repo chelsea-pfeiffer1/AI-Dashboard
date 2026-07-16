@@ -8,9 +8,8 @@ const route = forgeApiModule.route || api.route || forgeApiModule.default?.route
 
 const resolver = new Resolver();
 
-const DEFAULT_RELEASE_ID = process.env.DEFAULT_RELEASE_ID || 'VMSv26.06.00';
+const DEFAULT_RELEASE_ID = process.env.DEFAULT_RELEASE_ID || 'VMSv26.06.00 (GA: 07/30)';
 const DEFAULT_TEAM = process.env.DEFAULT_TEAM || 'VMS';
-const DEFAULT_JIRA_PROJECT_KEY = process.env.JIRA_PROJECT_KEY || 'VMS';
 const DEFAULT_CONFLUENCE_SPACE_KEY = process.env.CONFLUENCE_SPACE_KEY || 'PS';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.5';
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 20000);
@@ -57,20 +56,15 @@ function normalizeText(value) {
 
 function buildJql({ releaseId, team, view }, settings = {}) {
   const clauses = buildJqlFilterParts({ releaseId, team }, settings);
-  const sortClause = view === 'Release' ? 'ORDER BY priority DESC, updated DESC' : 'ORDER BY updated DESC';
+  const sortClause = 'ORDER BY priority ASC, status ASC, issuetype DESC, parent ASC, created DESC';
   return `${clauses.join(' AND ') || 'updated >= -30d'} ${sortClause}`;
 }
 
 function buildJqlFilterParts({ releaseId, team }, settings = {}) {
-  const clauses = [];
-  const projectKey = normalizeText(settings.jiraProjectKey || DEFAULT_JIRA_PROJECT_KEY);
+  const clauses = ['issuetype IN (Story, Bug)'];
   const release = normalizeText(releaseId || DEFAULT_RELEASE_ID);
   const teamValue = normalizeText(team || DEFAULT_TEAM);
   const teamField = normalizeText(settings.jiraTeamField || '');
-
-  if (projectKey) {
-    clauses.push(`project = "${escapeJqlValue(projectKey)}"`);
-  }
 
   if (release) {
     clauses.push(`fixVersion = "${escapeJqlValue(release)}"`);
@@ -93,7 +87,7 @@ function buildJqlFilterParts({ releaseId, team }, settings = {}) {
 
 function buildCardJql(baseJql, cardClause, view) {
   const combined = cardClause ? `${baseJql} AND (${cardClause})` : baseJql;
-  const sortClause = view === 'Release' ? 'ORDER BY priority DESC, updated DESC' : 'ORDER BY updated DESC';
+  const sortClause = 'ORDER BY priority ASC, status ASC, issuetype DESC, parent ASC, created DESC';
   return `${combined} ${sortClause}`;
 }
 
@@ -169,22 +163,32 @@ async function requestJson(path, requestOptions = {}, product = 'jira') {
 
 async function fetchJiraIssues(jql) {
   const issues = [];
-  let startAt = 0;
   const maxResults = 50;
-  let total = 0;
+  let nextPageToken;
 
   do {
     const payload = await requestJson(
-      route`/rest/api/3/search/jql?jql=${jql}&startAt=${startAt}&maxResults=${maxResults}&fields=${DEFAULT_FIELDS.join(',')}`,
-      {},
+      route`/rest/api/3/search/jql`,
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          jql,
+          fields: DEFAULT_FIELDS,
+          maxResults,
+          ...(nextPageToken ? { nextPageToken } : {})
+        })
+      },
       'jira'
     );
 
     const batch = Array.isArray(payload.issues) ? payload.issues : [];
     issues.push(...batch);
-    total = Number(payload.total || issues.length);
-    startAt += batch.length;
-  } while (startAt < total && issues.length < 200);
+    nextPageToken = payload.nextPageToken;
+  } while (nextPageToken && issues.length < 200);
 
   return issues;
 }
@@ -668,7 +672,8 @@ resolver.define('getDashboardData', async ({ payload }) => {
       }
     };
   } catch (error) {
-    return buildEmptyDashboardResponse({ payload, refreshedAt, settings });
+    console.error('getDashboardData failed:', error);
+    throw normalizeError(error);
   }
 });
 

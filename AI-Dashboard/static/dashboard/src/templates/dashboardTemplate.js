@@ -1,6 +1,6 @@
 export const dashboardTemplate = {
   filters: {
-    releaseId: 'VMSv26.06.00',
+    releaseId: 'VMSv26.06.00 (GA: 07/30)',
     team: 'VMS',
     confluenceSpaceKey: 'PS',
     view: 'Executive'
@@ -24,7 +24,7 @@ export const dashboardTemplate = {
   aiSummary: null,
   releaseSnapshot: {
     sourceSystem: 'Jira',
-    releaseId: 'VMSv26.06.00'
+    releaseId: 'VMSv26.06.00 (GA: 07/30)'
   },
   baselineSnapshot: {
     sourceSystem: 'Confluence',
@@ -46,7 +46,7 @@ export const dashboardTemplate = {
     openai: 'loading'
   },
   scope: {
-    releaseId: 'VMSv26.06.00',
+    releaseId: 'VMSv26.06.00 (GA: 07/30)',
     team: 'VMS',
     confluenceSpaceKey: 'PS'
   }
