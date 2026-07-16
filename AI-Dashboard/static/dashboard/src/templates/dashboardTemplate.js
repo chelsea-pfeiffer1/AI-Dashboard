@@ -21,6 +21,7 @@ export const dashboardTemplate = {
   records: [],
   workstreams: [],
   actions: [],
+  confluenceItems: [],
   aiSummary: null,
   releaseSnapshot: {
     sourceSystem: 'Jira',

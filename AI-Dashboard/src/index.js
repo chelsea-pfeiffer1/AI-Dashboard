@@ -11,6 +11,11 @@ const resolver = new Resolver();
 const DEFAULT_RELEASE_ID = process.env.DEFAULT_RELEASE_ID || 'VMSv26.06.00 (GA: 07/30)';
 const DEFAULT_TEAM = process.env.DEFAULT_TEAM || 'VMS';
 const DEFAULT_CONFLUENCE_SPACE_KEY = process.env.CONFLUENCE_SPACE_KEY || 'PS';
+const DEFAULT_CONFLUENCE_PAGE_ID = process.env.CONFLUENCE_PAGE_ID || '3431170205';
+const DEFAULT_CONFLUENCE_PAGE_TITLE = 'Parlevel';
+const CONFLUENCE_SITE_URL = 'https://365retailmarkets.atlassian.net';
+const DEFAULT_CONFLUENCE_PAGE_URL =
+  `${CONFLUENCE_SITE_URL}/wiki/spaces/PS/pages/3431170205/Parlevel`;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.5';
 const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 20000);
 const SETTINGS_KEY = 'dashboard-settings';
@@ -427,59 +432,158 @@ async function summarizeWithOpenAI({
 }
 
 async function fetchConfluenceSpaces() {
-  try {
-    const payload = await requestJson(route`/wiki/api/v2/spaces?limit=${100}`, {}, 'confluence');
-    const seen = new Map();
-    for (const space of Array.isArray(payload.results) ? payload.results : []) {
-      const key = normalizeText(space?.key || '');
-      const name = normalizeText(space?.name || key || 'Space');
-      if (key && !seen.has(key)) {
-        seen.set(key, { id: key, name: `${name} (${key})` });
-      }
-    }
+  return [{ id: DEFAULT_CONFLUENCE_SPACE_KEY, name: `${DEFAULT_CONFLUENCE_PAGE_TITLE} (${DEFAULT_CONFLUENCE_SPACE_KEY})` }];
+}
 
-    const options = Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
-    return [{ id: DEFAULT_CONFLUENCE_SPACE_KEY, name: `${DEFAULT_CONFLUENCE_SPACE_KEY} (default)` }, ...options];
-  } catch (error) {
-    return [{ id: DEFAULT_CONFLUENCE_SPACE_KEY, name: `${DEFAULT_CONFLUENCE_SPACE_KEY} (default)` }];
+function getNextCursor(payload) {
+  const next = normalizeText(payload?._links?.next || '');
+  if (!next) {
+    return '';
   }
+
+  try {
+    const query = next.includes('?') ? next.slice(next.indexOf('?') + 1) : next;
+    return new URLSearchParams(query).get('cursor') || '';
+  } catch {
+    return '';
+  }
+}
+
+function buildConfluenceWebUrl(content, fallback = '') {
+  const webUi = normalizeText(content?._links?.webui || '');
+  if (!webUi) {
+    return fallback;
+  }
+
+  if (/^https?:\/\//i.test(webUi)) {
+    return webUi;
+  }
+
+  if (webUi.startsWith('/wiki/')) {
+    return `${CONFLUENCE_SITE_URL}${webUi}`;
+  }
+
+  return `${CONFLUENCE_SITE_URL}/wiki${webUi.startsWith('/') ? '' : '/'}${webUi}`;
+}
+
+async function fetchConfluenceDescendants(pageId) {
+  const descendants = [];
+  const limit = 50;
+  let cursor = '';
+  const seenCursors = new Set();
+
+  do {
+    const path = cursor
+      ? route`/wiki/api/v2/pages/${pageId}/descendants?limit=${limit}&cursor=${cursor}`
+      : route`/wiki/api/v2/pages/${pageId}/descendants?limit=${limit}`;
+    const payload = await requestJson(path, {}, 'confluence');
+    const batch = Array.isArray(payload.results) ? payload.results : [];
+    descendants.push(...batch);
+    const nextCursor = getNextCursor(payload);
+    cursor = nextCursor && !seenCursors.has(nextCursor) ? nextCursor : '';
+    if (cursor) {
+      seenCursors.add(cursor);
+    }
+  } while (cursor);
+
+  return descendants;
+}
+
+async function fetchConfluenceContentDetail(item) {
+  const id = normalizeText(item?.id || '');
+  const type = normalizeText(item?.type || 'page').toLowerCase();
+  if (!id) {
+    return null;
+  }
+
+  let detail = null;
+  try {
+    if (type === 'page') {
+      detail = await requestJson(route`/wiki/api/v2/pages/${id}?body-format=storage`, {}, 'confluence');
+    } else if (type === 'folder') {
+      detail = await requestJson(route`/wiki/api/v2/folders/${id}`, {}, 'confluence');
+    } else if (type === 'database') {
+      detail = await requestJson(route`/wiki/api/v2/databases/${id}`, {}, 'confluence');
+    } else if (type === 'embed') {
+      detail = await requestJson(route`/wiki/api/v2/embeds/${id}`, {}, 'confluence');
+    } else if (type === 'whiteboard') {
+      detail = await requestJson(route`/wiki/api/v2/whiteboards/${id}`, {}, 'confluence');
+    }
+  } catch (error) {
+    detail = null;
+  }
+
+  const combined = { ...item, ...(detail || {}), id, type };
+  const pageFallback = type === 'page'
+    ? `${CONFLUENCE_SITE_URL}/wiki/pages/viewpage.action?pageId=${encodeURIComponent(id)}`
+    : '';
+
+  return {
+    ...combined,
+    title: normalizeText(combined.title || `${type} ${id}`),
+    subtype: normalizeText(combined.subtype || ''),
+    sourceUrl: buildConfluenceWebUrl(combined, pageFallback)
+  };
+}
+
+async function enrichConfluenceContent(items, concurrency = 8) {
+  const enriched = [];
+  for (let index = 0; index < items.length; index += concurrency) {
+    const batch = items.slice(index, index + concurrency);
+    const results = await Promise.all(batch.map(fetchConfluenceContentDetail));
+    enriched.push(...results.filter(Boolean));
+  }
+  return enriched;
 }
 
 async function fetchConfluenceSnapshot(confluenceSpaceKey = DEFAULT_CONFLUENCE_SPACE_KEY) {
   const spaceKey = normalizeText(confluenceSpaceKey || DEFAULT_CONFLUENCE_SPACE_KEY);
   if (!spaceKey) {
-    return { pages: [], source: null };
+    return { pages: [], items: [], source: null };
   }
 
   try {
-    const cql = `space="${spaceKey}" AND type=page`;
-    const search = await requestJson(route`/wiki/rest/api/search?cql=${cql}&limit=${10}&expand=version,space`, {}, 'confluence');
-    const results = Array.isArray(search.results) ? search.results : [];
-    const pageIds = results
-      .map((result) => normalizeText(result?.content?.id || result?.id || ''))
-      .filter(Boolean)
-      .slice(0, 10);
-
-    const pages = await Promise.all(
-      pageIds.map(async (pageId) => {
-        try {
-          return await requestJson(route`/wiki/rest/api/content/${pageId}?expand=version,space,body.storage`, {}, 'confluence');
-        } catch (error) {
-          return null;
-        }
-      })
-    );
+    const rootPage = await fetchConfluenceContentDetail({
+      id: DEFAULT_CONFLUENCE_PAGE_ID,
+      type: 'page',
+      title: DEFAULT_CONFLUENCE_PAGE_TITLE,
+      depth: 0,
+      parentId: null,
+      sourceUrl: DEFAULT_CONFLUENCE_PAGE_URL
+    });
+    const descendants = await fetchConfluenceDescendants(DEFAULT_CONFLUENCE_PAGE_ID);
+    const nestedItems = await enrichConfluenceContent(descendants);
+    const items = [rootPage, ...nestedItems].filter(Boolean).map((item, index) => ({
+      ...item,
+      sourceUrl: index === 0 ? DEFAULT_CONFLUENCE_PAGE_URL : item.sourceUrl
+    }));
+    const pages = items.filter((item) => item.type === 'page');
 
     return {
-      pages: pages.filter(Boolean),
+      pages,
+      items,
       source: {
         spaceKey,
-        cql,
-        endpoint: '/wiki/rest/api/search'
+        pageId: DEFAULT_CONFLUENCE_PAGE_ID,
+        pageTitle: normalizeText(rootPage?.title || DEFAULT_CONFLUENCE_PAGE_TITLE),
+        pageUrl: DEFAULT_CONFLUENCE_PAGE_URL,
+        endpoint: `/wiki/api/v2/pages/${DEFAULT_CONFLUENCE_PAGE_ID}/descendants`,
+        itemCount: items.length
       }
     };
   } catch (error) {
-    return { pages: [], source: null };
+    return {
+      pages: [],
+      items: [],
+      source: {
+        spaceKey,
+        pageId: DEFAULT_CONFLUENCE_PAGE_ID,
+        pageTitle: DEFAULT_CONFLUENCE_PAGE_TITLE,
+        pageUrl: DEFAULT_CONFLUENCE_PAGE_URL,
+        endpoint: `/wiki/api/v2/pages/${DEFAULT_CONFLUENCE_PAGE_ID}/descendants`,
+        itemCount: 0
+      }
+    };
   }
 }
 
@@ -494,14 +598,15 @@ function buildSourceLinks({ jql, confluenceSnapshot, confluenceSpaceKey, refresh
     },
     confluence: {
       system: 'Confluence',
-      endpoint: confluenceSnapshot?.source?.endpoint || '/wiki/rest/api/search',
+      endpoint: confluenceSnapshot?.source?.endpoint || `/wiki/api/v2/pages/${DEFAULT_CONFLUENCE_PAGE_ID}/descendants`,
       spaceKey: confluenceSpaceKey || confluenceSnapshot?.source?.spaceKey || DEFAULT_CONFLUENCE_SPACE_KEY,
-      cql:
-        confluenceSnapshot?.source?.cql ||
-        `space="${confluenceSpaceKey || DEFAULT_CONFLUENCE_SPACE_KEY}" AND type=page`,
-      transformationSummary: confluenceSnapshot?.pages?.length
-        ? 'Fetched pages from the selected Confluence space.'
-        : 'No pages were found in the selected Confluence space.',
+      pageId: confluenceSnapshot?.source?.pageId || DEFAULT_CONFLUENCE_PAGE_ID,
+      pageTitle: confluenceSnapshot?.source?.pageTitle || DEFAULT_CONFLUENCE_PAGE_TITLE,
+      pageUrl: confluenceSnapshot?.source?.pageUrl || DEFAULT_CONFLUENCE_PAGE_URL,
+      itemCount: confluenceSnapshot?.items?.length || 0,
+      transformationSummary: confluenceSnapshot?.items?.length
+        ? 'Fetched the Parlevel page and its nested Confluence content tree.'
+        : 'The configured Parlevel content tree could not be loaded.',
       lastRefresh: refreshedAt
     },
     openai: {
@@ -521,7 +626,7 @@ function buildEmptyDashboardResponse({ payload = {}, refreshedAt = new Date().to
   const jql = buildJql({ releaseId, team, view: payload.view }, settings);
   const sourceLinks = buildSourceLinks({
     jql,
-    confluenceSnapshot: { pages: [], source: null },
+    confluenceSnapshot: { pages: [], items: [], source: null },
     confluenceSpaceKey,
     refreshedAt
   });
@@ -529,7 +634,7 @@ function buildEmptyDashboardResponse({ payload = {}, refreshedAt = new Date().to
   return {
     releaseOptions: DEFAULT_RELEASE_OPTIONS,
     teamOptions: DEFAULT_TEAM_OPTIONS,
-    confluenceSpaceOptions: [{ id: confluenceSpaceKey, name: `${confluenceSpaceKey} (default)` }],
+    confluenceSpaceOptions: [{ id: confluenceSpaceKey, name: `${DEFAULT_CONFLUENCE_PAGE_TITLE} (${confluenceSpaceKey})` }],
     viewOptions: DEFAULT_VIEW_OPTIONS,
     issues: [],
     dashboard: {
@@ -550,6 +655,7 @@ function buildEmptyDashboardResponse({ payload = {}, refreshedAt = new Date().to
       releaseSnapshot: { sourceSystem: 'Jira', releaseId },
       sourceLinks,
       records: [],
+      confluenceItems: [],
       cardData: {},
       cardStates: { jira: 'empty', confluence: 'empty', openai: 'empty' }
     }
@@ -663,10 +769,20 @@ resolver.define('getDashboardData', async ({ payload }) => {
         },
         sourceLinks,
         records: normalizedRecords,
+        confluenceItems: confluenceSnapshot.items.map((item) => ({
+          id: item.id,
+          title: item.title,
+          type: item.type,
+          subtype: item.subtype || '',
+          parentId: item.parentId || null,
+          depth: Number(item.depth || 0),
+          status: item.status || 'current',
+          sourceUrl: item.sourceUrl || ''
+        })),
         cardData,
         cardStates: {
           jira: issues.length > 0 ? 'loaded' : 'empty',
-          confluence: confluenceSnapshot.pages.length > 0 ? 'loaded' : 'empty',
+          confluence: confluenceSnapshot.items.length > 0 ? 'loaded' : 'empty',
           openai: aiSummary ? 'loaded' : 'empty'
         }
       }

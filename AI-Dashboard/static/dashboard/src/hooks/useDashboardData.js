@@ -81,6 +81,7 @@ function mergeDashboard(response) {
     records: Array.isArray(nextDashboard.records) ? nextDashboard.records : [],
     workstreams: Array.isArray(nextDashboard.workstreams) ? nextDashboard.workstreams : [],
     actions: Array.isArray(nextDashboard.actions) ? nextDashboard.actions : [],
+    confluenceItems: Array.isArray(nextDashboard.confluenceItems) ? nextDashboard.confluenceItems : [],
     cardData: nextDashboard.cardData || {},
     aiSummary: nextDashboard.aiSummary || null
   };
@@ -93,7 +94,7 @@ export default function useDashboardData() {
   const [dashboard, setDashboard] = useState(dashboardTemplate);
   const [releaseOptions, setReleaseOptions] = useState([{ id: 'VMSv26.06.00 (GA: 07/30)', name: 'VMSv26.06.00 (GA: 07/30)' }]);
   const [teamOptions, setTeamOptions] = useState([{ id: 'VMS', name: 'VMS' }]);
-  const [confluenceSpaceOptions, setConfluenceSpaceOptions] = useState([{ id: 'PS', name: 'PS (default)' }]);
+  const [confluenceSpaceOptions, setConfluenceSpaceOptions] = useState([{ id: 'PS', name: 'Parlevel (PS)' }]);
   const [viewOptions] = useState(['Executive', 'Team', 'Release']);
 
   useEffect(() => {

@@ -16,6 +16,21 @@ function formatTimestamp(value) {
   }
 }
 
+function formatConfluenceType(item) {
+  if (item?.type === 'page' && item?.subtype === 'live') {
+    return 'Live doc';
+  }
+
+  const labels = {
+    page: 'Page',
+    folder: 'Folder',
+    database: 'Database',
+    embed: 'Smart link',
+    whiteboard: 'Whiteboard'
+  };
+  return labels[item?.type] || 'Content';
+}
+
 class AppErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -35,7 +50,7 @@ class AppErrorBoundary extends React.Component {
       return (
         <div style={pageStyle}>
           <div style={panelStyle}>
-            <h1 style={{ marginTop: 0, color: '#fecaca' }}>Dashboard failed to render</h1>
+            <h1 style={{ marginTop: 0, color: '#ae2a19' }}>Dashboard failed to render</h1>
             <p style={{ lineHeight: 1.6 }}>
               The app crashed while rendering. The browser console should show the first useful error.
             </p>
@@ -54,10 +69,10 @@ class AppErrorBoundary extends React.Component {
 function MiniCard({ label, value }) {
   return (
     <div style={cardStyle}>
-      <div style={{ color: '#94a3b8', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+      <div style={{ color: '#626f86', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
         {label}
       </div>
-      <div style={{ color: '#f8fafc', fontSize: 28, fontWeight: 800, marginTop: 8 }}>
+      <div style={{ color: '#172b4d', fontSize: 28, fontWeight: 800, marginTop: 8 }}>
         {value}
       </div>
     </div>
@@ -82,13 +97,14 @@ export default function App() {
   const sourceLinks = dashboard?.sourceLinks || {};
   const records = Array.isArray(dashboard?.records) ? dashboard.records : [];
   const workstreams = Array.isArray(dashboard?.workstreams) ? dashboard.workstreams : [];
+  const confluenceItems = Array.isArray(dashboard?.confluenceItems) ? dashboard.confluenceItems : [];
 
   if (loading) {
     return (
       <div style={pageStyle}>
         <div style={panelStyle}>
-          <h1 style={{ marginTop: 0, color: '#f8fafc' }}>AI Dashboard</h1>
-          <p style={{ color: '#94a3b8' }}>Loading live Jira, Confluence, and AI data...</p>
+          <h1 style={{ marginTop: 0, color: '#172b4d' }}>AI Dashboard</h1>
+          <p style={{ color: '#626f86' }}>Loading live Jira, Confluence, and AI data...</p>
         </div>
       </div>
     );
@@ -100,8 +116,8 @@ export default function App() {
         <div style={shellStyle}>
           <header style={{ marginBottom: 24 }}>
             <div style={eyebrowStyle}>Executive PMO Intelligence Dashboard</div>
-            <h1 style={{ margin: '6px 0 0', fontSize: 36, color: '#f8fafc' }}>AI Dashboard</h1>
-            <div style={{ marginTop: 10, color: '#cbd5e1', lineHeight: 1.6 }}>
+            <h1 style={{ margin: '6px 0 0', fontSize: 36, color: '#172b4d' }}>AI Dashboard</h1>
+            <div style={{ marginTop: 10, color: '#44546f', lineHeight: 1.6 }}>
               Release <strong>{dashboard?.scope?.releaseId || config?.releaseId || 'Unknown'}</strong> for team{' '}
               <strong>{dashboard?.scope?.team || config?.team || 'Unknown'}</strong>
               {' '}in Confluence space <strong>{dashboard?.scope?.confluenceSpaceKey || config?.confluenceSpaceKey || 'Unknown'}</strong>
@@ -152,8 +168,16 @@ export default function App() {
             </div>
             <div style={sourceBoxStyle}>
               <div><strong>Confluence</strong></div>
+              <div>Page: {sourceLinks.confluence?.pageTitle || 'Parlevel'}</div>
               <div>Endpoint: {sourceLinks.confluence?.endpoint || 'Not available'}</div>
-              <div>CQL: {sourceLinks.confluence?.cql || 'Not available'}</div>
+              <div>Nested content items: {sourceLinks.confluence?.itemCount ?? confluenceItems.length}</div>
+              {sourceLinks.confluence?.pageUrl ? (
+                <div>
+                  <a href={sourceLinks.confluence.pageUrl} target="_blank" rel="noreferrer" style={sourceLinkStyle}>
+                    Open Confluence page
+                  </a>
+                </div>
+              ) : null}
               <div>Refresh: {formatTimestamp(sourceLinks.confluence?.lastRefresh)}</div>
             </div>
             <div style={sourceBoxStyle}>
@@ -161,6 +185,40 @@ export default function App() {
               <div>Endpoint: {sourceLinks.openai?.endpoint || 'Not available'}</div>
               <div>Model: {sourceLinks.openai?.model || 'Not available'}</div>
               <div>Refresh: {formatTimestamp(sourceLinks.openai?.lastRefresh)}</div>
+            </div>
+          </section>
+
+          <section style={sectionStyle}>
+            <h2 style={sectionTitleStyle}>Confluence Sources</h2>
+            <div style={{ color: '#44546f', marginBottom: 14, lineHeight: 1.6 }}>
+              Live content nested beneath the Parlevel page. Each entry opens its exact source in Confluence.
+            </div>
+            <div style={contentTreeStyle}>
+              {confluenceItems.length > 0 ? confluenceItems.map((item) => (
+                <div
+                  key={`${item.type}-${item.id}`}
+                  style={{
+                    ...contentItemStyle,
+                    marginLeft: Math.min(Number(item.depth || 0), 6) * 18
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, color: '#172b4d' }}>{item.title || 'Untitled'}</div>
+                    <div style={{ color: '#626f86', fontSize: 12, marginTop: 3 }}>
+                      {formatConfluenceType(item)} · ID {item.id}
+                    </div>
+                  </div>
+                  {item.sourceUrl ? (
+                    <a href={item.sourceUrl} target="_blank" rel="noreferrer" style={sourceLinkStyle}>
+                      Open
+                    </a>
+                  ) : (
+                    <span style={{ color: '#8993a4', fontSize: 13 }}>Link unavailable</span>
+                  )}
+                </div>
+              )) : (
+                <div style={emptyStateStyle}>No nested Confluence content was returned.</div>
+              )}
             </div>
           </section>
 
@@ -209,8 +267,8 @@ export default function App() {
 const pageStyle = {
   minHeight: '100vh',
   padding: 24,
-  background: 'linear-gradient(180deg, #020617 0%, #0f172a 100%)',
-  color: '#e2e8f0',
+  background: 'linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%)',
+  color: '#172b4d',
   fontFamily: 'Arial, sans-serif'
 };
 
@@ -220,10 +278,11 @@ const shellStyle = {
 };
 
 const panelStyle = {
-  background: 'rgba(15, 23, 42, 0.88)',
-  border: '1px solid rgba(148, 163, 184, 0.18)',
+  background: '#ffffff',
+  border: '1px solid #dfe1e6',
   borderRadius: 16,
-  padding: 20
+  padding: 20,
+  boxShadow: '0 2px 8px rgba(9, 30, 66, 0.08)'
 };
 
 const sectionStyle = {
@@ -234,11 +293,11 @@ const sectionStyle = {
 const sectionTitleStyle = {
   margin: '0 0 12px',
   fontSize: 18,
-  color: '#f8fafc'
+  color: '#172b4d'
 };
 
 const eyebrowStyle = {
-  color: '#94a3b8',
+  color: '#626f86',
   fontSize: 13,
   textTransform: 'uppercase',
   letterSpacing: '0.04em'
@@ -253,17 +312,17 @@ const gridStyle = {
 const cardStyle = {
   borderRadius: 12,
   padding: 16,
-  background: 'rgba(2, 6, 23, 0.4)',
-  border: '1px solid rgba(148, 163, 184, 0.14)',
+  background: '#f7f8f9',
+  border: '1px solid #dfe1e6',
   minHeight: 92
 };
 
 const sourceBoxStyle = {
   borderRadius: 12,
   padding: 14,
-  background: 'rgba(2, 6, 23, 0.35)',
-  border: '1px solid rgba(148, 163, 184, 0.12)',
-  color: '#cbd5e1',
+  background: '#f7f8f9',
+  border: '1px solid #dfe1e6',
+  color: '#44546f',
   lineHeight: 1.6,
   marginBottom: 12
 };
@@ -271,7 +330,37 @@ const sourceBoxStyle = {
 const summaryStyle = {
   whiteSpace: 'pre-wrap',
   lineHeight: 1.7,
-  color: '#e2e8f0'
+  color: '#172b4d'
+};
+
+const sourceLinkStyle = {
+  color: '#0c66e4',
+  fontWeight: 700,
+  whiteSpace: 'nowrap'
+};
+
+const contentTreeStyle = {
+  display: 'grid',
+  gap: 8
+};
+
+const contentItemStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 16,
+  padding: '12px 14px',
+  border: '1px solid #dfe1e6',
+  borderRadius: 10,
+  background: '#f7f8f9'
+};
+
+const emptyStateStyle = {
+  padding: 16,
+  border: '1px dashed #b3b9c4',
+  borderRadius: 10,
+  color: '#626f86',
+  background: '#f7f8f9'
 };
 
 const preStyle = {
@@ -280,26 +369,26 @@ const preStyle = {
   margin: 0,
   padding: 14,
   borderRadius: 12,
-  background: 'rgba(2, 6, 23, 0.4)',
-  border: '1px solid rgba(148, 163, 184, 0.12)',
-  color: '#cbd5e1'
+  background: '#f7f8f9',
+  border: '1px solid #dfe1e6',
+  color: '#172b4d'
 };
 
 const errorStyle = {
   marginBottom: 18,
   borderRadius: 12,
-  border: '1px solid rgba(248, 113, 113, 0.3)',
-  background: 'rgba(127, 29, 29, 0.35)',
-  color: '#fecaca',
+  border: '1px solid #f15b50',
+  background: '#fff1f0',
+  color: '#ae2a19',
   padding: '14px 16px'
 };
 
 const primaryButtonStyle = {
   minHeight: 40,
   borderRadius: 10,
-  border: '1px solid rgba(45, 212, 191, 0.45)',
-  background: '#0f766e',
-  color: '#ecfeff',
+  border: '1px solid #0c66e4',
+  background: '#0c66e4',
+  color: '#ffffff',
   padding: '0 16px',
   cursor: 'pointer',
   fontWeight: 700

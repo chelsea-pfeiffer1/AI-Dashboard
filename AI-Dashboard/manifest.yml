@@ -17,6 +17,12 @@ permissions:
     - read:jira-user
     - read:confluence-content.all
     - read:confluence-space.summary
+    - read:hierarchical-content:confluence
+    - read:page:confluence
+    - read:folder:confluence
+    - read:database:confluence
+    - read:embed:confluence
+    - read:whiteboard:confluence
     - storage:app
   external:
     fetch:
