@@ -672,4 +672,4 @@ resolver.define('getDashboardData', async ({ payload }) => {
   }
 });
 
-module.exports.handler = resolver.getDefinitions(
+module.exports.handler = resolver.getDefinitions();
