@@ -777,6 +777,7 @@ resolver.define('getDashboardData', async ({ payload }) => {
           parentId: item.parentId || null,
           depth: Number(item.depth || 0),
           status: item.status || 'current',
+          updatedAt: item.version?.createdAt || item.createdAt || '',
           sourceUrl: item.sourceUrl || ''
         })),
         cardData,
