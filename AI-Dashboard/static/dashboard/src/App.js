@@ -127,7 +127,7 @@ function StatusPill({ children, tone = 'neutral' }) {
 }
 
 function ProgressBar({ value, tone = 'blue' }) {
-  const color = { blue: COLORS.blue, green: COLORS.green, amber: '#f5a623', red: '#e2483d' }[tone];
+  const color = { neutral: '#8993a4', blue: COLORS.blue, green: COLORS.green, amber: '#f5a623', red: '#e2483d' }[tone];
   return (
     <div style={progressTrackStyle} aria-label={`${value}%`}>
       <div style={{ ...progressFillStyle, width: `${clamp(value, 0, 100)}%`, background: color }} />
@@ -135,18 +135,32 @@ function ProgressBar({ value, tone = 'blue' }) {
   );
 }
 
-function IssueRow({ issue }) {
-  const risk = issue?.risk?.label || 'low';
+function AiRiskCard({ risk }) {
   return (
-    <div style={listRowStyle}>
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={rowTitleStyle}>
-          <a href={jiraUrl(issue.issueKey)} target="_blank" rel="noreferrer" style={sourceLinkStyle}>{issue.issueKey}</a>
-          <span>{issue.summary}</span>
+    <div style={riskCardStyle}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'flex-start' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={rowTitleStyle}>{risk.title}</div>
+          <div style={rowMetaStyle}>{risk.category} · {risk.owner || 'Owner not identified'} · {risk.status || 'Status not stated'}</div>
         </div>
-        <div style={rowMetaStyle}>{issue.owner || 'Unassigned'} · {issue.status || 'Unknown'}</div>
+        <StatusPill tone={toneForRisk(risk.severity)}>{risk.severity} risk</StatusPill>
       </div>
-      <StatusPill tone={toneForRisk(risk)}>{risk} risk</StatusPill>
+      <div style={riskDescriptionStyle}>{risk.description}</div>
+      <div style={riskImpactStyle}><strong>Potential impact:</strong> {risk.impact}</div>
+      <div style={riskImpactStyle}><strong>Recommended action:</strong> {risk.recommendedAction}</div>
+      <div style={evidenceListStyle}>
+        {(risk.evidence || []).map((evidence, index) => (
+          evidence.url ? (
+            <a key={`${evidence.sourceSystem}-${evidence.sourceId}-${index}`} href={evidence.url} target="_blank" rel="noreferrer" style={evidenceLinkStyle}>
+              {evidence.sourceSystem}: {evidence.title || evidence.sourceId}
+            </a>
+          ) : (
+            <span key={`${evidence.sourceSystem}-${evidence.sourceId}-${index}`} style={evidenceLinkStyle}>
+              {evidence.sourceSystem}: {evidence.title || evidence.sourceId}
+            </span>
+          )
+        ))}
+      </div>
     </div>
   );
 }
@@ -155,8 +169,68 @@ function EmptyState({ children }) {
   return <div style={emptyStateStyle}>{children}</div>;
 }
 
+function ScopeControls({ config, releaseOptions, confluenceSpaceOptions, onApply }) {
+  const [releaseId, setReleaseId] = React.useState(config?.releaseId || '');
+  const [spaceKey, setSpaceKey] = React.useState(config?.confluenceSpaceKey || '');
+
+  React.useEffect(() => {
+    setReleaseId(config?.releaseId || '');
+    setSpaceKey(config?.confluenceSpaceKey || '');
+  }, [config?.releaseId, config?.confluenceSpaceKey]);
+
+  const submit = (event) => {
+    event.preventDefault();
+    const nextRelease = releaseId.trim();
+    const nextSpace = spaceKey.trim();
+    if (!nextRelease || !nextSpace) return;
+    onApply({ releaseId: nextRelease, confluenceSpaceKey: nextSpace });
+  };
+
+  return (
+    <form onSubmit={submit} style={scopePanelStyle}>
+      <div style={{ minWidth: 220 }}>
+        <div style={scopeTitleStyle}>Readout scope</div>
+        <div style={scopeHelpStyle}>Choose the Jira release and Confluence knowledge source for the AI analysis.</div>
+      </div>
+      <div style={scopeFieldsStyle}>
+        <label style={fieldLabelStyle}>
+          <span>Jira fix version</span>
+          <input
+            type="text"
+            list="release-options"
+            value={releaseId}
+            onChange={(event) => setReleaseId(event.target.value)}
+            placeholder="Enter the exact fix version"
+            style={inputStyle}
+            required
+          />
+          <datalist id="release-options">
+            {(releaseOptions || []).map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+          </datalist>
+        </label>
+        <label style={fieldLabelStyle}>
+          <span>Confluence space</span>
+          <input
+            type="text"
+            list="confluence-space-options"
+            value={spaceKey}
+            onChange={(event) => setSpaceKey(event.target.value.toUpperCase())}
+            placeholder="Enter a space key, for example PS"
+            style={inputStyle}
+            required
+          />
+          <datalist id="confluence-space-options">
+            {(confluenceSpaceOptions || []).map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+          </datalist>
+        </label>
+        <button type="submit" style={{ ...primaryButtonStyle, alignSelf: 'end' }}>Generate readout</button>
+      </div>
+    </form>
+  );
+}
+
 export default function App() {
-  const { loading, error, config, dashboard, refresh } = useDashboardData();
+  const { loading, error, config, dashboard, refresh, releaseOptions, confluenceSpaceOptions } = useDashboardData();
   const summary = dashboard?.summary || {};
   const metrics = dashboard?.metrics || {};
   const sourceLinks = dashboard?.sourceLinks || {};
@@ -165,18 +239,21 @@ export default function App() {
   const workstreams = Array.isArray(dashboard?.workstreams) ? dashboard.workstreams : [];
   const actions = Array.isArray(dashboard?.actions) ? dashboard.actions : [];
   const confluenceItems = Array.isArray(dashboard?.confluenceItems) ? dashboard.confluenceItems : [];
+  const aiAnalysis = dashboard?.aiAnalysis || null;
+  const aiStatus = dashboard?.aiStatus || {};
+  const aiRisks = Array.isArray(aiAnalysis?.risks) ? aiAnalysis.risks : [];
+  const analysisAvailable = Boolean(aiAnalysis && metrics.analysisAvailable);
 
   const total = records.length;
   const completed = records.filter((record) => isDone(record.status)).length;
   const active = records.filter((record) => isActive(record.status)).length;
   const notStarted = Math.max(total - completed - active, 0);
   const completionPercent = total ? Math.round((completed / total) * 100) : 0;
-  const riskRecords = records.filter((record) => ['high', 'medium'].includes(record?.risk?.label) || /blocked|blocker/i.test(record.status));
-  const confidenceScore = total
-    ? clamp(Math.round((completionPercent * 0.7) + ((1 - (metrics.blockers || 0) / total) * 20) + ((1 - (metrics.highRisk || 0) / total) * 10)), 0, 100)
-    : 0;
-  const confidenceTone = confidenceScore >= 80 ? 'green' : confidenceScore >= 60 ? 'amber' : 'red';
-  const confidenceLabel = confidenceScore >= 80 ? 'On track' : confidenceScore >= 60 ? 'Watch' : 'At risk';
+  const confidenceScore = analysisAvailable ? clamp(Number(aiAnalysis?.confidence?.score || 0), 0, 100) : 0;
+  const confidenceLabel = analysisAvailable
+    ? ({ on_track: 'On track', watch: 'Watch', at_risk: 'At risk', insufficient_data: 'Insufficient data' }[aiAnalysis?.confidence?.label] || 'Unknown')
+    : 'Awaiting AI';
+  const confidenceTone = !analysisAvailable ? 'neutral' : confidenceScore >= 80 ? 'green' : confidenceScore >= 60 ? 'amber' : 'red';
   const meetingItems = confluenceItems.filter((item) =>
     item?.subtype === 'live' || /meeting|standup|sync|weekly|retro|minutes|agenda|planning|status update/i.test(item?.title || '')
   );
@@ -206,6 +283,8 @@ export default function App() {
                 <span>·</span>
                 <span>{dashboard?.scope?.team || config?.team || 'Unknown team'}</span>
                 <span>·</span>
+                <span>Confluence {dashboard?.scope?.confluenceSpaceKey || config?.confluenceSpaceKey || 'Unknown space'}</span>
+                <span>·</span>
                 <span>Updated {formatTimestamp(summary.refreshedAt)}</span>
               </div>
             </div>
@@ -220,8 +299,24 @@ export default function App() {
               ['risks-blockers', 'Risks & Blockers'],
               ['meeting-intelligence', 'Meeting Intelligence'],
               ['data-quality', 'Data Quality']
-            ].map(([id, label]) => <a key={id} href={`#${id}`} style={navLinkStyle}>{label}</a>)}
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                style={navLinkStyle}
+              >
+                {label}
+              </button>
+            ))}
           </nav>
+
+          <ScopeControls
+            config={config}
+            releaseOptions={releaseOptions}
+            confluenceSpaceOptions={confluenceSpaceOptions}
+            onApply={(scope) => refresh(scope, { showLoading: true })}
+          />
 
           {error ? (
             <div style={errorStyle}><strong>Live data unavailable</strong><div style={{ marginTop: 5 }}>{error}</div></div>
@@ -232,32 +327,34 @@ export default function App() {
               <MetricCard label="Release scope" value={total} detail="Stories and bugs" tone="blue" />
               <MetricCard label="Completed" value={completed} detail={`${completionPercent}% of scope`} tone="green" />
               <MetricCard label="In motion" value={active} detail="In progress or review" />
-              <MetricCard label="Confluence sources" value={confluenceItems.length} detail="Pages, live docs, and nested content" />
+              <MetricCard label="Confluence sources" value={confluenceItems.length} detail={`Pages and live docs from ${dashboard?.scope?.confluenceSpaceKey || config?.confluenceSpaceKey}`} />
             </div>
             <div style={summaryCalloutStyle}>
               <div style={calloutLabelStyle}>Executive readout</div>
-              <div style={summaryStyle}>{dashboard?.aiSummary || 'AI analysis is not available yet. Jira and Confluence metrics remain live.'}</div>
+              <div style={summaryStyle}>{dashboard?.aiSummary || aiStatus.message || 'AI analysis is not available yet.'}</div>
             </div>
           </Section>
 
-          <Section id="release-confidence" title="Release Confidence" description="A directional score based on completion, high-risk work, and active blockers.">
+          <Section id="release-confidence" title="Release Confidence" description="AI assessment grounded in the current Jira delivery data and Confluence project documentation.">
             <div style={twoColumnStyle}>
               <div style={confidenceCardStyle}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
                   <div>
                     <div style={metricLabelStyle}>Current confidence</div>
-                    <div style={{ ...confidenceScoreStyle, color: COLORS[confidenceTone] }}>{confidenceScore}%</div>
+                    <div style={{ ...confidenceScoreStyle, color: confidenceTone === 'neutral' ? COLORS.muted : COLORS[confidenceTone] }}>
+                      {analysisAvailable ? `${confidenceScore}%` : '—'}
+                    </div>
                   </div>
                   <StatusPill tone={confidenceTone}>{confidenceLabel}</StatusPill>
                 </div>
                 <ProgressBar value={confidenceScore} tone={confidenceTone} />
-                <div style={metricDetailStyle}>Calculated from current Jira status and risk signals; it is not a committed forecast.</div>
+                <div style={metricDetailStyle}>{aiAnalysis?.confidence?.rationale || aiStatus.message || 'Waiting for AI analysis.'}</div>
               </div>
               <div style={compactMetricGridStyle}>
                 <MetricCard label="Scope complete" value={`${completionPercent}%`} detail={`${completed} of ${total}`} tone="green" />
-                <MetricCard label="High risk" value={metrics.highRisk ?? 0} detail="Needs leadership attention" tone={(metrics.highRisk || 0) > 0 ? 'red' : 'green'} />
-                <MetricCard label="Blockers" value={metrics.blockers ?? 0} detail="Currently blocked" tone={(metrics.blockers || 0) > 0 ? 'red' : 'green'} />
-                <MetricCard label="Decisions" value={metrics.decisionsNeeded ?? 0} detail="Approval or clarity needed" tone={(metrics.decisionsNeeded || 0) > 0 ? 'amber' : 'green'} />
+                <MetricCard label="High risk" value={analysisAvailable ? metrics.highRisk : '—'} detail="AI-identified risks" tone={analysisAvailable && metrics.highRisk > 0 ? 'red' : 'neutral'} />
+                <MetricCard label="Blockers" value={analysisAvailable ? metrics.blockers : '—'} detail="AI-confirmed blockers" tone={analysisAvailable && metrics.blockers > 0 ? 'red' : 'neutral'} />
+                <MetricCard label="Decisions" value={analysisAvailable ? metrics.decisionsNeeded : '—'} detail="Evidence indicates a decision is needed" tone={analysisAvailable && metrics.decisionsNeeded > 0 ? 'amber' : 'neutral'} />
               </div>
             </div>
           </Section>
@@ -288,22 +385,22 @@ export default function App() {
 
           <Section id="risks-blockers" title="Risks and Blockers" description="The items most likely to affect release confidence or require an executive decision.">
             <div style={metricGridStyle}>
-              <MetricCard label="High risk" value={metrics.highRisk ?? 0} tone={(metrics.highRisk || 0) ? 'red' : 'green'} />
-              <MetricCard label="Medium risk" value={metrics.mediumRisk ?? 0} tone={(metrics.mediumRisk || 0) ? 'amber' : 'green'} />
-              <MetricCard label="Blocked" value={metrics.blockers ?? 0} tone={(metrics.blockers || 0) ? 'red' : 'green'} />
-              <MetricCard label="Decisions needed" value={metrics.decisionsNeeded ?? 0} tone={(metrics.decisionsNeeded || 0) ? 'amber' : 'green'} />
+              <MetricCard label="High risk" value={analysisAvailable ? metrics.highRisk : '—'} tone={analysisAvailable && metrics.highRisk ? 'red' : 'neutral'} />
+              <MetricCard label="Medium risk" value={analysisAvailable ? metrics.mediumRisk : '—'} tone={analysisAvailable && metrics.mediumRisk ? 'amber' : 'neutral'} />
+              <MetricCard label="Blocked" value={analysisAvailable ? metrics.blockers : '—'} tone={analysisAvailable && metrics.blockers ? 'red' : 'neutral'} />
+              <MetricCard label="Decisions needed" value={analysisAvailable ? metrics.decisionsNeeded : '—'} tone={analysisAvailable && metrics.decisionsNeeded ? 'amber' : 'neutral'} />
             </div>
             <div style={{ ...twoColumnStyle, marginTop: 20 }}>
               <div>
-                <div style={subsectionTitleStyle}>Priority issues</div>
-                {riskRecords.length ? riskRecords.slice(0, 10).map((issue) => <IssueRow key={issue.issueKey} issue={issue} />) : <EmptyState>No high- or medium-risk issues are currently identified.</EmptyState>}
+                <div style={subsectionTitleStyle}>Evidence-backed risks</div>
+                {aiRisks.length ? aiRisks.map((risk) => <AiRiskCard key={risk.id} risk={risk} />) : <EmptyState>{analysisAvailable ? 'The AI analysis did not identify evidence-supported risks.' : aiStatus.message || 'AI risk analysis is unavailable.'}</EmptyState>}
               </div>
               <div>
                 <div style={subsectionTitleStyle}>Executive decisions</div>
-                {actions.length ? actions.map((action) => (
-                  <div key={action.issueKey} style={listRowStyle}>
+                {actions.length ? actions.map((action, index) => (
+                  <div key={`${action.issueKey || action.summary}-${index}`} style={listRowStyle}>
                     <div style={{ minWidth: 0 }}>
-                      <a href={jiraUrl(action.issueKey)} target="_blank" rel="noreferrer" style={sourceLinkStyle}>{action.issueKey}</a>
+                      {(action.sourceUrl || action.issueKey) ? <a href={action.sourceUrl || jiraUrl(action.issueKey)} target="_blank" rel="noreferrer" style={sourceLinkStyle}>{action.issueKey || 'Open evidence'}</a> : null}
                       <div style={{ ...rowTitleStyle, marginTop: 4 }}>{action.summary}</div>
                       <div style={rowMetaStyle}>{action.owner} · {action.status}</div>
                     </div>
@@ -329,13 +426,13 @@ export default function App() {
               </div>
               <div>
                 <div style={subsectionTitleStyle}>Captured follow-ups</div>
-                {actions.length ? actions.slice(0, 6).map((action) => (
-                  <div key={`meeting-${action.issueKey}`} style={listRowStyle}>
+                {actions.length ? actions.slice(0, 6).map((action, index) => (
+                  <div key={`meeting-${action.issueKey || action.summary}-${index}`} style={listRowStyle}>
                     <div>
                       <div style={rowTitleStyle}>{action.summary}</div>
                       <div style={rowMetaStyle}>{action.owner} · {action.status}</div>
                     </div>
-                    <a href={jiraUrl(action.issueKey)} target="_blank" rel="noreferrer" style={sourceLinkStyle}>{action.issueKey}</a>
+                    {(action.sourceUrl || action.issueKey) ? <a href={action.sourceUrl || jiraUrl(action.issueKey)} target="_blank" rel="noreferrer" style={sourceLinkStyle}>{action.issueKey || 'Open evidence'}</a> : null}
                   </div>
                 )) : <EmptyState>No decision-oriented Jira follow-ups were detected.</EmptyState>}
               </div>
@@ -345,8 +442,8 @@ export default function App() {
           <Section id="data-quality" title="Data Quality" description="Freshness, source availability, and traceability behind this dashboard.">
             <div style={threeColumnStyle}>
               <SourceCard name="Jira" state={cardStates.jira} detail={`${total} release items`} refreshedAt={sourceLinks.jira?.lastRefresh} />
-              <SourceCard name="Confluence" state={cardStates.confluence} detail={`${confluenceItems.length} source items`} refreshedAt={sourceLinks.confluence?.lastRefresh} link={sourceLinks.confluence?.pageUrl} />
-              <SourceCard name="AI analysis" state={cardStates.openai} detail={sourceLinks.openai?.model || 'Model unavailable'} refreshedAt={sourceLinks.openai?.lastRefresh} />
+              <SourceCard name="Confluence" state={cardStates.confluence} detail={sourceLinks.confluence?.error || `${confluenceItems.length} source items from ${sourceLinks.confluence?.spaceKey || config?.confluenceSpaceKey}`} refreshedAt={sourceLinks.confluence?.lastRefresh} link={sourceLinks.confluence?.pageUrl} />
+              <SourceCard name="AI analysis" state={cardStates.openai} detail={`${sourceLinks.openai?.model || 'Model unavailable'} · ${aiStatus.message || 'Status unavailable'}`} refreshedAt={sourceLinks.openai?.lastRefresh} />
             </div>
             <details style={detailsStyle}>
               <summary style={detailsSummaryStyle}>View source lineage ({confluenceItems.length} Confluence items)</summary>
@@ -365,6 +462,14 @@ export default function App() {
             <details style={detailsStyle}>
               <summary style={detailsSummaryStyle}>View Jira query</summary>
               <pre style={{ ...preStyle, marginTop: 12 }}>{sourceLinks.jira?.jql || 'JQL unavailable'}</pre>
+            </details>
+            <details style={detailsStyle}>
+              <summary style={detailsSummaryStyle}>View AI data gaps ({aiAnalysis?.dataGaps?.length || 0})</summary>
+              <div style={{ marginTop: 12 }}>
+                {aiAnalysis?.dataGaps?.length ? aiAnalysis.dataGaps.map((gap, index) => (
+                  <div key={`${gap}-${index}`} style={listRowStyle}>{gap}</div>
+                )) : <EmptyState>No AI data gaps were reported.</EmptyState>}
+              </div>
             </details>
           </Section>
         </div>
@@ -397,7 +502,7 @@ const pageTitleStyle = { margin: '6px 0 8px', fontSize: 34, lineHeight: 1.1, col
 const headerMetaStyle = { display: 'flex', gap: 8, flexWrap: 'wrap', color: '#44546f', lineHeight: 1.5 };
 const eyebrowStyle = { color: COLORS.blue, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' };
 const navStyle = { ...panelStyle, display: 'flex', gap: 8, flexWrap: 'wrap', padding: 10, marginBottom: 18, position: 'sticky', top: 8, zIndex: 2 };
-const navLinkStyle = { color: '#44546f', textDecoration: 'none', fontSize: 13, fontWeight: 700, padding: '8px 11px', borderRadius: 8 };
+const navLinkStyle = { color: '#44546f', background: '#fff', border: `1px solid transparent`, fontFamily: 'inherit', fontSize: 13, fontWeight: 700, padding: '8px 11px', borderRadius: 8, cursor: 'pointer' };
 const sectionStyle = { ...panelStyle, marginBottom: 18, scrollMarginTop: 86 };
 const sectionHeaderStyle = { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 18, marginBottom: 18 };
 const sectionTitleStyle = { margin: 0, fontSize: 21, color: COLORS.ink };
@@ -425,6 +530,17 @@ const rowTitleStyle = { display: 'flex', gap: 8, alignItems: 'baseline', color: 
 const rowMetaStyle = { color: COLORS.muted, fontSize: 12, marginTop: 4, lineHeight: 1.4 };
 const sourceLinkStyle = { color: COLORS.blue, fontWeight: 700, textDecoration: 'none', whiteSpace: 'nowrap' };
 const sourceCardStyle = { padding: 16, border: `1px solid ${COLORS.border}`, borderRadius: 11, background: '#f7f8f9' };
+const scopePanelStyle = { ...panelStyle, display: 'flex', flexWrap: 'wrap', alignItems: 'end', justifyContent: 'space-between', gap: 20, marginBottom: 18 };
+const scopeTitleStyle = { color: COLORS.ink, fontSize: 16, fontWeight: 800 };
+const scopeHelpStyle = { color: COLORS.muted, fontSize: 12, lineHeight: 1.45, marginTop: 5 };
+const scopeFieldsStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', alignItems: 'end', gap: 12, flex: '1 1 680px' };
+const fieldLabelStyle = { display: 'grid', gap: 6, color: '#44546f', fontSize: 12, fontWeight: 700 };
+const inputStyle = { width: '100%', minHeight: 40, boxSizing: 'border-box', border: `1px solid ${COLORS.border}`, borderRadius: 8, background: '#fff', color: COLORS.ink, padding: '0 11px', fontSize: 14 };
+const riskCardStyle = { padding: 16, border: `1px solid ${COLORS.border}`, borderRadius: 11, background: '#fafbfc', marginBottom: 10 };
+const riskDescriptionStyle = { marginTop: 12, color: COLORS.ink, lineHeight: 1.55 };
+const riskImpactStyle = { marginTop: 9, color: '#44546f', fontSize: 13, lineHeight: 1.5 };
+const evidenceListStyle = { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 13 };
+const evidenceLinkStyle = { color: COLORS.blue, background: COLORS.blueSoft, padding: '5px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700, textDecoration: 'none' };
 const detailsStyle = { marginTop: 14, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: '12px 14px', background: '#fafbfc' };
 const detailsSummaryStyle = { cursor: 'pointer', fontWeight: 700, color: COLORS.ink };
 const sourceRowStyle = { ...listRowStyle, paddingRight: 14 };

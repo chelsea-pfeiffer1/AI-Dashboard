@@ -16,13 +16,20 @@ export const dashboardTemplate = {
     highRisk: 0,
     mediumRisk: 0,
     blockers: 0,
-    decisionsNeeded: 0
+    decisionsNeeded: 0,
+    analysisAvailable: false
   },
   records: [],
   workstreams: [],
   actions: [],
   confluenceItems: [],
   aiSummary: null,
+  aiAnalysis: null,
+  aiStatus: {
+    state: 'empty',
+    code: 'not_run',
+    message: 'AI analysis has not run.'
+  },
   releaseSnapshot: {
     sourceSystem: 'Jira',
     releaseId: 'VMSv26.06.00 (GA: 07/30)'
