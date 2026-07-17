@@ -143,7 +143,7 @@ function normalizeJiraIssue(issue = {}) {
     priority,
     labels,
     components,
-    workstream: components[0] || owner || 'Unassigned',
+    workstream: components[0] || 'Unassigned workstream',
     description: normalizeText(extractAdfText(fields.description)).slice(0, 3000),
     dueDate: normalizeText(fields.duedate || ''),
     createdAt: normalizeText(fields.created || ''),
@@ -293,7 +293,7 @@ function buildWorkstreams(records) {
   const groups = new Map();
 
   for (const record of records) {
-    const key = normalizeText(record.workstream || record.owner || 'Unassigned');
+    const key = normalizeText(record.workstream || 'Unassigned workstream');
     if (!groups.has(key)) {
       groups.set(key, []);
     }

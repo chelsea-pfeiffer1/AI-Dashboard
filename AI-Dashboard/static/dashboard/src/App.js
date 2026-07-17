@@ -236,7 +236,6 @@ export default function App() {
   const sourceLinks = dashboard?.sourceLinks || {};
   const cardStates = dashboard?.cardStates || {};
   const records = Array.isArray(dashboard?.records) ? dashboard.records : [];
-  const workstreams = Array.isArray(dashboard?.workstreams) ? dashboard.workstreams : [];
   const actions = Array.isArray(dashboard?.actions) ? dashboard.actions : [];
   const confluenceItems = Array.isArray(dashboard?.confluenceItems) ? dashboard.confluenceItems : [];
   const aiAnalysis = dashboard?.aiAnalysis || null;
@@ -247,6 +246,8 @@ export default function App() {
   const total = records.length;
   const completed = records.filter((record) => isDone(record.status)).length;
   const active = records.filter((record) => isActive(record.status)).length;
+  const blocked = records.filter((record) => /blocked|blocker/i.test(String(record.status || ''))).length;
+  const highRisk = records.filter((record) => record?.risk?.label === 'high').length;
   const notStarted = Math.max(total - completed - active, 0);
   const completionPercent = total ? Math.round((completed / total) * 100) : 0;
   const confidenceScore = analysisAvailable ? clamp(Number(aiAnalysis?.confidence?.score || 0), 0, 100) : 0;
@@ -368,18 +369,12 @@ export default function App() {
             <ProgressBar value={completionPercent} tone="blue" />
             <div style={{ marginTop: 22 }}>
               <div style={subsectionTitleStyle}>Workstream health</div>
-              {workstreams.length ? workstreams.map((stream) => {
-                const streamTone = stream.blocked > 0 ? 'red' : stream.highRisk > 0 ? 'amber' : 'green';
-                return (
-                  <div key={stream.name} style={listRowStyle}>
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <div style={rowTitleStyle}>{stream.name}</div>
-                      <div style={rowMetaStyle}>{stream.total} items · {stream.blocked} blocked · {stream.highRisk} high risk</div>
-                    </div>
-                    <StatusPill tone={streamTone}>{streamTone === 'green' ? 'Healthy' : streamTone === 'amber' ? 'Watch' : 'At risk'}</StatusPill>
-                  </div>
-                );
-              }) : <EmptyState>No workstream data was returned from Jira.</EmptyState>}
+              <div style={metricGridStyle}>
+                <MetricCard label="Blocked" value={blocked} detail="Items currently stopped" tone={blocked > 0 ? 'red' : 'neutral'} />
+                <MetricCard label="High risk" value={analysisAvailable ? highRisk : '—'} detail="AI-identified delivery risks" tone={highRisk > 0 ? 'red' : 'neutral'} />
+                <MetricCard label="Complete" value={completed} detail={`${completionPercent}% of release scope`} tone="green" />
+                <MetricCard label="In motion" value={active} detail="In progress, review, testing, or QA" tone="blue" />
+              </div>
             </div>
           </Section>
 
