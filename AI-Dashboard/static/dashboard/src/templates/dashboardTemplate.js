@@ -32,7 +32,10 @@ export const dashboardTemplate = {
   },
   releaseSnapshot: {
     sourceSystem: 'Jira',
-    releaseId: 'VMSv26.06.00 (GA: 07/30)'
+    releaseId: 'VMSv26.06.00 (GA: 07/30)',
+    targetDate: '',
+    daysUntilRelease: null,
+    scheduleDataAvailable: false
   },
   baselineSnapshot: {
     sourceSystem: 'Confluence',

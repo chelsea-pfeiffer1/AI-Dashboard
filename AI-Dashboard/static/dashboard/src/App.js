@@ -27,6 +27,27 @@ function formatTimestamp(value) {
   }
 }
 
+function formatDate(value) {
+  if (!value) return 'Date unavailable';
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC'
+    }).format(new Date(`${value}T12:00:00Z`));
+  } catch {
+    return String(value);
+  }
+}
+
+function releaseTimingDetail(releaseSnapshot) {
+  if (!releaseSnapshot?.scheduleDataAvailable) return 'No target date set in Jira';
+  if (releaseSnapshot.released) return 'Marked released in Jira';
+  const days = Number(releaseSnapshot.daysUntilRelease);
+  if (!Number.isFinite(days)) return 'Timing unavailable';
+  if (days < 0) return `${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} past target`;
+  if (days === 0) return 'Target date is today';
+  return `${days} day${days === 1 ? '' : 's'} remaining`;
+}
+
 function formatConfluenceType(item) {
   if (item?.type === 'page' && item?.subtype === 'live') return 'Live doc';
   return ({ page: 'Page', folder: 'Folder', database: 'Database', embed: 'Smart link', whiteboard: 'Whiteboard' })[item?.type] || 'Content';
@@ -233,6 +254,7 @@ export default function App() {
   const { loading, error, config, dashboard, refresh, releaseOptions, confluenceSpaceOptions } = useDashboardData();
   const summary = dashboard?.summary || {};
   const metrics = dashboard?.metrics || {};
+  const releaseSnapshot = dashboard?.releaseSnapshot || {};
   const sourceLinks = dashboard?.sourceLinks || {};
   const cardStates = dashboard?.cardStates || {};
   const records = Array.isArray(dashboard?.records) ? dashboard.records : [];
@@ -336,7 +358,7 @@ export default function App() {
             </div>
           </Section>
 
-          <Section id="release-confidence" title="Release Confidence" description="AI assessment grounded in the current Jira delivery data and Confluence project documentation.">
+          <Section id="release-confidence" title="Release Confidence" description="AI assessment of Jira release work against the target date, informed by Confluence meeting transcripts.">
             <div style={twoColumnStyle}>
               <div style={confidenceCardStyle}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
@@ -352,6 +374,7 @@ export default function App() {
                 <div style={metricDetailStyle}>{aiAnalysis?.confidence?.rationale || aiStatus.message || 'Waiting for AI analysis.'}</div>
               </div>
               <div style={compactMetricGridStyle}>
+                <MetricCard label="Target release" value={formatDate(releaseSnapshot.targetDate)} detail={releaseTimingDetail(releaseSnapshot)} tone={releaseSnapshot.scheduleDataAvailable ? 'blue' : 'neutral'} />
                 <MetricCard label="Scope complete" value={`${completionPercent}%`} detail={`${completed} of ${total}`} tone="green" />
                 <MetricCard label="High risk" value={analysisAvailable ? metrics.highRisk : '—'} detail="AI-identified risks" tone={analysisAvailable && metrics.highRisk > 0 ? 'red' : 'neutral'} />
                 <MetricCard label="Blockers" value={analysisAvailable ? metrics.blockers : '—'} detail="AI-confirmed blockers" tone={analysisAvailable && metrics.blockers > 0 ? 'red' : 'neutral'} />
