@@ -17,6 +17,7 @@ permissions:
     - read:jira-user
     - read:confluence-content.all
     - read:confluence-space.summary
+    - read:space:confluence
     - read:hierarchical-content:confluence
     - read:page:confluence
     - read:folder:confluence

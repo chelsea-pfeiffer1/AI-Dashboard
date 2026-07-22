@@ -624,20 +624,68 @@ async function analyzeWithOpenAI({
 
 async function fetchConfluenceSpaces() {
   try {
-    const payload = await requestJson(route`/wiki/rest/api/space?limit=${100}&type=global&status=current`, {}, 'confluence');
-    const spaces = (Array.isArray(payload.results) ? payload.results : [])
+    const spaces = [];
+    const limit = 100;
+    let cursor = '';
+
+    // Confluence REST v2 uses cursor pagination. The retired v1 space endpoint used
+    // offset pagination and now returns HTTP 410 on sites where Atlassian has removed it.
+    do {
+      const payload = await requestJson(
+        cursor
+          ? route`/wiki/api/v2/spaces?limit=${limit}&type=global&status=current&cursor=${cursor}`
+          : route`/wiki/api/v2/spaces?limit=${limit}&type=global&status=current`,
+        {},
+        'confluence'
+      );
+      spaces.push(...(Array.isArray(payload.results) ? payload.results : []));
+      cursor = getConfluenceNextCursor(payload);
+    } while (cursor);
+
+    const options = spaces
       .map((space) => ({
         id: normalizeText(space?.key || ''),
         name: `${normalizeText(space?.name || space?.key || 'Space')} (${normalizeText(space?.key || '')})`
       }))
       .filter((space) => space.id)
       .sort((a, b) => a.name.localeCompare(b.name));
-    return spaces.length
-      ? spaces
+    return options.length
+      ? options
       : [{ id: DEFAULT_CONFLUENCE_SPACE_KEY, name: `${DEFAULT_CONFLUENCE_SPACE_KEY} (default)` }];
   } catch (error) {
     return [{ id: DEFAULT_CONFLUENCE_SPACE_KEY, name: `${DEFAULT_CONFLUENCE_SPACE_KEY} (default)` }];
   }
+}
+
+function getConfluenceNextCursor(payload) {
+  const nextLink = normalizeText(payload?._links?.next || '');
+  if (!nextLink) {
+    return '';
+  }
+
+  // `_links.next` is a relative URL in REST v2. URL safely decodes the cursor
+  // without passing Atlassian-provided URL text directly into Forge's route tag.
+  try {
+    return normalizeText(new URL(nextLink, CONFLUENCE_SITE_URL).searchParams.get('cursor') || '');
+  } catch (error) {
+    return '';
+  }
+}
+
+function getConfluencePageDepth(page, pagesById) {
+  let depth = 0;
+  let parentId = normalizeText(page?.parentId || '');
+  const visited = new Set([normalizeText(page?.id || '')]);
+
+  // REST v2 returns a direct parentId rather than the expanded v1 ancestors array.
+  // Walk the fetched page graph and guard against malformed circular relationships.
+  while (parentId && pagesById.has(parentId) && !visited.has(parentId)) {
+    visited.add(parentId);
+    depth += 1;
+    parentId = normalizeText(pagesById.get(parentId)?.parentId || '');
+  }
+
+  return depth;
 }
 
 function buildConfluenceWebUrl(content, fallback = '') {
@@ -664,31 +712,43 @@ async function fetchConfluenceSnapshot(confluenceSpaceKey = DEFAULT_CONFLUENCE_S
   }
 
   try {
-    const space = await requestJson(route`/wiki/rest/api/space/${spaceKey}`, {}, 'confluence');
+    // REST v2 addresses page collections by the immutable numeric space ID, so
+    // resolve the user-facing key before reading the selected space's pages.
+    const spacePayload = await requestJson(
+      route`/wiki/api/v2/spaces?keys=${spaceKey}&status=current&limit=${1}`,
+      {},
+      'confluence'
+    );
+    const space = (Array.isArray(spacePayload.results) ? spacePayload.results : [])
+      .find((candidate) => normalizeText(candidate?.key || '').toUpperCase() === spaceKey);
+    if (!space?.id) {
+      throw new Error(`Confluence space ${spaceKey} was not found or is not accessible.`);
+    }
+
     const pages = [];
     const limit = 50;
-    let start = 0;
+    let cursor = '';
     do {
       const payload = await requestJson(
-        route`/wiki/rest/api/content?spaceKey=${spaceKey}&type=page&status=current&limit=${limit}&start=${start}&expand=body.storage,version,space,ancestors`,
+        cursor
+          ? route`/wiki/api/v2/spaces/${space.id}/pages?status=current&body-format=storage&limit=${limit}&cursor=${cursor}`
+          : route`/wiki/api/v2/spaces/${space.id}/pages?status=current&body-format=storage&limit=${limit}`,
         {},
         'confluence'
       );
       const batch = Array.isArray(payload.results) ? payload.results : [];
       pages.push(...batch);
-      start += batch.length;
-      if (!payload?._links?.next || batch.length === 0) {
-        break;
-      }
-    } while (true);
+      cursor = batch.length ? getConfluenceNextCursor(payload) : '';
+    } while (cursor);
 
+    const pagesById = new Map(pages.map((page) => [normalizeText(page?.id || ''), page]));
     const items = pages.map((page) => ({
       ...page,
       type: 'page',
       spaceKey,
       title: normalizeText(page.title || `Page ${page.id}`),
-      parentId: normalizeText(page?.ancestors?.[page.ancestors.length - 1]?.id || ''),
-      depth: Array.isArray(page.ancestors) ? page.ancestors.length : 0,
+      parentId: normalizeText(page?.parentId || ''),
+      depth: getConfluencePageDepth(page, pagesById),
       sourceUrl: buildConfluenceWebUrl(
         page,
         `${CONFLUENCE_SITE_URL}/wiki/pages/viewpage.action?pageId=${encodeURIComponent(page.id)}`
@@ -704,7 +764,7 @@ async function fetchConfluenceSnapshot(confluenceSpaceKey = DEFAULT_CONFLUENCE_S
         spaceId: normalizeText(space.id),
         pageTitle: normalizeText(space.name || spaceKey),
         pageUrl: spaceUrl,
-        endpoint: `/wiki/rest/api/content?spaceKey=${spaceKey}&type=page`,
+        endpoint: `/wiki/api/v2/spaces/${space.id}/pages`,
         itemCount: items.length
       }
     };
@@ -716,7 +776,7 @@ async function fetchConfluenceSnapshot(confluenceSpaceKey = DEFAULT_CONFLUENCE_S
         spaceKey,
         pageTitle: spaceKey,
         pageUrl: `${CONFLUENCE_SITE_URL}/wiki/spaces/${encodeURIComponent(spaceKey)}`,
-        endpoint: '/wiki/rest/api/content?spaceKey={spaceKey}&type=page',
+        endpoint: '/wiki/api/v2/spaces/{spaceId}/pages',
         itemCount: 0,
         error: normalizeText(error?.message || 'Unable to load Confluence space.')
       }
@@ -735,7 +795,7 @@ function buildSourceLinks({ jql, confluenceSnapshot, confluenceSpaceKey, refresh
     },
     confluence: {
       system: 'Confluence',
-      endpoint: confluenceSnapshot?.source?.endpoint || '/wiki/rest/api/content?spaceKey={spaceKey}&type=page',
+      endpoint: confluenceSnapshot?.source?.endpoint || '/wiki/api/v2/spaces/{spaceId}/pages',
       spaceKey: confluenceSpaceKey || confluenceSnapshot?.source?.spaceKey || DEFAULT_CONFLUENCE_SPACE_KEY,
       pageTitle: confluenceSnapshot?.source?.pageTitle || confluenceSpaceKey || DEFAULT_CONFLUENCE_SPACE_KEY,
       pageUrl: confluenceSnapshot?.source?.pageUrl || `${CONFLUENCE_SITE_URL}/wiki/spaces/${encodeURIComponent(confluenceSpaceKey || DEFAULT_CONFLUENCE_SPACE_KEY)}`,
