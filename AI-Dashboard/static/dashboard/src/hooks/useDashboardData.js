@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { dashboardTemplate } from '../templates/dashboardTemplate';
-import { getDashboardData } from '../services/dashboardService';
+import {
+  deleteSavedDashboardSnapshot,
+  getDashboardData,
+  getSavedDashboardSnapshot,
+  listSavedDashboardSnapshots,
+  saveDashboardSnapshot
+} from '../services/dashboardService';
 
 const STORAGE_KEY = 'forge-ai-dashboard-config-v2';
 
@@ -123,6 +129,11 @@ export default function useDashboardData() {
   const [teamOptions, setTeamOptions] = useState([{ id: 'VMS', name: 'VMS' }]);
   const [confluenceSpaceOptions, setConfluenceSpaceOptions] = useState([{ id: 'PS', name: 'PS (default)' }]);
   const [viewOptions] = useState(['Executive', 'Team', 'Release']);
+  const [savedSnapshots, setSavedSnapshots] = useState([]);
+  const [snapshotLoading, setSnapshotLoading] = useState(true);
+  const [snapshotSaving, setSnapshotSaving] = useState(false);
+  const [snapshotError, setSnapshotError] = useState('');
+  const [activeSnapshot, setActiveSnapshot] = useState(null);
 
   useEffect(() => {
     try {
@@ -131,6 +142,23 @@ export default function useDashboardData() {
       // Ignore storage failures in Forge browser contexts.
     }
   }, [config]);
+
+  const reloadSavedSnapshots = useCallback(async () => {
+    setSnapshotLoading(true);
+    setSnapshotError('');
+    try {
+      const response = await listSavedDashboardSnapshots();
+      setSavedSnapshots(Array.isArray(response?.snapshots) ? response.snapshots : []);
+    } catch (caughtError) {
+      setSnapshotError(getErrorMessage(caughtError));
+    } finally {
+      setSnapshotLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    reloadSavedSnapshots();
+  }, [reloadSavedSnapshots]);
 
   const refresh = useCallback(
     async (overrideConfig = {}, { showLoading = false } = {}) => {
@@ -155,6 +183,7 @@ export default function useDashboardData() {
         const response = await getDashboardData(effectiveConfig);
         setConfig(effectiveConfig);
         setDashboard(mergeDashboard(response));
+        setActiveSnapshot(null);
         setReleaseOptions(Array.isArray(response?.releaseOptions) ? response.releaseOptions : releaseOptions);
         setTeamOptions(Array.isArray(response?.teamOptions) ? response.teamOptions : teamOptions);
         setConfluenceSpaceOptions(
@@ -170,6 +199,77 @@ export default function useDashboardData() {
     },
     [config, releaseOptions, teamOptions, confluenceSpaceOptions]
   );
+
+  const saveSnapshot = useCallback(async ({ title, note }) => {
+    setSnapshotSaving(true);
+    setSnapshotError('');
+    try {
+      const response = await saveDashboardSnapshot({ title, note, dashboard });
+      const saved = response?.snapshot;
+      if (saved) {
+        setSavedSnapshots((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      }
+      return saved;
+    } catch (caughtError) {
+      setSnapshotError(getErrorMessage(caughtError));
+      return null;
+    } finally {
+      setSnapshotSaving(false);
+    }
+  }, [dashboard]);
+
+  const openSnapshot = useCallback(async (snapshotId) => {
+    if (!snapshotId) {
+      return;
+    }
+    setSnapshotLoading(true);
+    setSnapshotError('');
+    setError('');
+    try {
+      const response = await getSavedDashboardSnapshot(snapshotId);
+      const snapshot = response?.snapshot;
+      if (!snapshot?.dashboard) {
+        throw new Error('The saved dashboard did not contain a readable snapshot.');
+      }
+      setDashboard(mergeDashboard({ dashboard: snapshot.dashboard }));
+      setActiveSnapshot({
+        id: snapshot.id,
+        title: snapshot.title,
+        note: snapshot.note,
+        savedAt: snapshot.savedAt,
+        sourceRefreshedAt: snapshot.sourceRefreshedAt,
+        canDelete: snapshot.canDelete
+      });
+    } catch (caughtError) {
+      setSnapshotError(getErrorMessage(caughtError));
+    } finally {
+      setSnapshotLoading(false);
+    }
+  }, []);
+
+  const deleteSnapshot = useCallback(async (snapshotId) => {
+    setSnapshotError('');
+    try {
+      const response = await deleteSavedDashboardSnapshot(snapshotId);
+      if (response?.deleted) {
+        setSavedSnapshots((current) => current.filter((item) => item.id !== snapshotId));
+        if (activeSnapshot?.id === snapshotId) {
+          setActiveSnapshot(null);
+          setDashboard(dashboardTemplate);
+        }
+      }
+      return Boolean(response?.deleted);
+    } catch (caughtError) {
+      setSnapshotError(getErrorMessage(caughtError));
+      return false;
+    }
+  }, [activeSnapshot?.id]);
+
+  const closeSnapshot = useCallback(() => {
+    setActiveSnapshot(null);
+    setDashboard(dashboardTemplate);
+    setSnapshotError('');
+  }, []);
 
   const updateConfig = useCallback((patch) => {
     setConfig((current) => ({
@@ -188,9 +288,19 @@ export default function useDashboardData() {
       error,
       config,
       dashboard,
+      savedSnapshots,
+      snapshotLoading,
+      snapshotSaving,
+      snapshotError,
+      activeSnapshot,
       updateConfig,
       resetConfig,
       refresh,
+      saveSnapshot,
+      openSnapshot,
+      deleteSnapshot,
+      closeSnapshot,
+      reloadSavedSnapshots,
       releaseOptions,
       teamOptions,
       confluenceSpaceOptions,
@@ -201,9 +311,19 @@ export default function useDashboardData() {
       error,
       config,
       dashboard,
+      savedSnapshots,
+      snapshotLoading,
+      snapshotSaving,
+      snapshotError,
+      activeSnapshot,
       updateConfig,
       resetConfig,
       refresh,
+      saveSnapshot,
+      openSnapshot,
+      deleteSnapshot,
+      closeSnapshot,
+      reloadSavedSnapshots,
       releaseOptions,
       teamOptions,
       confluenceSpaceOptions,

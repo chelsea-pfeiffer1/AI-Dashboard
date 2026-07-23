@@ -29,6 +29,20 @@ You must be able to view the selected Jira work and Confluence space. If content
 
 The release, space, and Slack conversation fields start blank on each visit. Select **Refresh data** to rerun the current readout with the latest source data after generating it once.
 
+## Save an executive version
+
+After generating a live readout, use **Executive snapshot library** to preserve the status presented at that moment:
+
+1. Enter a recognizable title, such as `July steering committee status`.
+2. Optionally add a short executive note explaining the decision context.
+3. Select **Save this version**.
+
+Saved versions appear by title whenever an authorized user opens the installed dashboard. An executive can select one and choose **Open saved view** without knowing the Jira fix version, Confluence space, or Slack conversation IDs used to prepare it. The saved banner shows both when the version was saved and when its source data was last refreshed.
+
+Saved versions are frozen reports and do not refresh automatically. Return to the live setup and generate a new readout before saving the next status update. Up to 30 versions can be retained for one app installation; only the person who saved a version can delete it.
+
+The saved executive artifact contains the displayed status, aggregate metrics, concise issue fields, risk analysis, PMO controls, and evidence links. It deliberately excludes raw Slack messages, Slack conversation IDs, Jira descriptions, Jira labels, Confluence page bodies, and the generated JQL. Anyone who can open the installed global dashboard can view its saved versions, subject to the site's normal app access.
+
 ## Read the dashboard
 
 Use the navigation buttons below the header to jump between sections.

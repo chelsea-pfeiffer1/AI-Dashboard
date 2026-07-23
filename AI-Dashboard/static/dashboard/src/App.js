@@ -312,8 +312,170 @@ function ScopeControls({ config, releaseOptions, confluenceSpaceOptions, onApply
   );
 }
 
+function SnapshotLibrary({
+  snapshots,
+  activeSnapshot,
+  loading,
+  saving,
+  error,
+  canSave,
+  suggestedTitle,
+  onOpen,
+  onSave,
+  onDelete,
+  onClose
+}) {
+  const [selectedId, setSelectedId] = React.useState('');
+  const [title, setTitle] = React.useState('');
+  const [note, setNote] = React.useState('');
+  const [confirmation, setConfirmation] = React.useState('');
+
+  React.useEffect(() => {
+    if (!selectedId && snapshots?.length) {
+      setSelectedId(snapshots[0].id);
+    }
+  }, [selectedId, snapshots]);
+
+  React.useEffect(() => {
+    if (canSave) {
+      setTitle(suggestedTitle);
+    }
+  }, [canSave, suggestedTitle]);
+
+  const selected = (snapshots || []).find((snapshot) => snapshot.id === selectedId);
+
+  const submitSave = async (event) => {
+    event.preventDefault();
+    setConfirmation('');
+    const saved = await onSave({ title: title.trim(), note: note.trim() });
+    if (saved) {
+      setSelectedId(saved.id);
+      setConfirmation(`Saved “${saved.title}” for the executive dashboard library.`);
+      setNote('');
+    }
+  };
+
+  const removeSelected = async () => {
+    if (!selected?.canDelete) return;
+    if (!window.confirm(`Delete the saved dashboard “${selected.title}”? This cannot be undone.`)) return;
+    const deleted = await onDelete(selected.id);
+    if (deleted) {
+      setSelectedId('');
+      setConfirmation('Saved dashboard deleted.');
+    }
+  };
+
+  return (
+    <section style={snapshotLibraryStyle} aria-label="Saved executive dashboards">
+      <div style={{ minWidth: 230 }}>
+        <div style={scopeTitleStyle}>Executive snapshot library</div>
+        <div style={scopeHelpStyle}>
+          Open a frozen status view by name—no Jira release, Confluence space, or Slack conversation IDs required.
+        </div>
+      </div>
+      <div style={snapshotWorkspaceStyle}>
+        <div style={snapshotOpenStyle}>
+          <label style={fieldLabelStyle}>
+            <span>Saved dashboard</span>
+            <select
+              value={selectedId}
+              onChange={(event) => {
+                setSelectedId(event.target.value);
+                setConfirmation('');
+              }}
+              style={inputStyle}
+              disabled={loading || !snapshots?.length}
+            >
+              {!snapshots?.length ? <option value="">No saved dashboards yet</option> : null}
+              {(snapshots || []).map((snapshot) => (
+                <option key={snapshot.id} value={snapshot.id}>
+                  {snapshot.title} · {formatTimestamp(snapshot.savedAt)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            style={secondaryButtonStyle}
+            disabled={!selectedId || loading}
+            onClick={() => onOpen(selectedId)}
+          >
+            {loading ? 'Loading…' : 'Open saved view'}
+          </button>
+          {selected?.canDelete ? (
+            <button type="button" style={dangerButtonStyle} onClick={removeSelected}>Delete</button>
+          ) : null}
+        </div>
+        {activeSnapshot ? (
+          <div style={savedSnapshotBannerStyle}>
+            <div>
+              <strong>Viewing saved version: {activeSnapshot.title}</strong>
+              <div style={rowMetaStyle}>
+                Saved {formatTimestamp(activeSnapshot.savedAt)} · Source data from {formatTimestamp(activeSnapshot.sourceRefreshedAt)}
+              </div>
+              {activeSnapshot.note ? <div style={{ marginTop: 7 }}>{activeSnapshot.note}</div> : null}
+            </div>
+            <button type="button" style={secondaryButtonStyle} onClick={onClose}>Return to live setup</button>
+          </div>
+        ) : (
+          <form onSubmit={submitSave} style={snapshotSaveStyle}>
+            <label style={fieldLabelStyle}>
+              <span>Snapshot title</span>
+              <input
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                placeholder="July steering committee status"
+                maxLength={100}
+                style={inputStyle}
+                disabled={!canSave || saving}
+                required
+              />
+            </label>
+            <label style={fieldLabelStyle}>
+              <span>Executive note (optional)</span>
+              <input
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                placeholder="Context executives should know"
+                maxLength={500}
+                style={inputStyle}
+                disabled={!canSave || saving}
+              />
+            </label>
+            <button type="submit" style={primaryButtonStyle} disabled={!canSave || saving || !title.trim()}>
+              {saving ? 'Saving…' : 'Save this version'}
+            </button>
+          </form>
+        )}
+        {!canSave && !activeSnapshot ? (
+          <div style={scopeHelpStyle}>Generate a live readout below before saving a new version.</div>
+        ) : null}
+        {confirmation ? <div style={successStyle}>{confirmation}</div> : null}
+        {error ? <div style={errorStyle}>{error}</div> : null}
+      </div>
+    </section>
+  );
+}
+
 export default function App() {
-  const { loading, error, config, dashboard, refresh, releaseOptions, confluenceSpaceOptions } = useDashboardData();
+  const {
+    loading,
+    error,
+    config,
+    dashboard,
+    refresh,
+    releaseOptions,
+    confluenceSpaceOptions,
+    savedSnapshots,
+    snapshotLoading,
+    snapshotSaving,
+    snapshotError,
+    activeSnapshot,
+    saveSnapshot,
+    openSnapshot,
+    deleteSnapshot,
+    closeSnapshot
+  } = useDashboardData();
   const hasSelectedScope = Boolean(config?.releaseId && config?.confluenceSpaceKey);
   const summary = dashboard?.summary || {};
   const metrics = dashboard?.metrics || {};
@@ -349,6 +511,10 @@ export default function App() {
   const meetingItems = confluenceItems.filter((item) =>
     item?.subtype === 'live' || /meeting|standup|sync|weekly|retro|minutes|agenda|planning|status update/i.test(item?.title || '')
   );
+  const canSaveSnapshot = Boolean(!activeSnapshot && summary.refreshedAt && dashboard?.scope?.releaseId);
+  const suggestedSnapshotTitle = canSaveSnapshot
+    ? `${dashboard.scope.releaseId} · ${new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date())}`
+    : '';
 
   if (loading) {
     return (
@@ -380,15 +546,19 @@ export default function App() {
                 <span>Updated {formatTimestamp(summary.refreshedAt)}</span>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => refresh({}, { showLoading: true })}
-              style={primaryButtonStyle}
-              disabled={!hasSelectedScope}
-              title={hasSelectedScope ? 'Refresh the selected release and space' : 'Choose a fix version and Confluence space first'}
-            >
-              Refresh data
-            </button>
+            {activeSnapshot ? (
+              <StatusPill tone="blue">Saved version</StatusPill>
+            ) : (
+              <button
+                type="button"
+                onClick={() => refresh({}, { showLoading: true })}
+                style={primaryButtonStyle}
+                disabled={!hasSelectedScope}
+                title={hasSelectedScope ? 'Refresh the selected release and space' : 'Choose a fix version and Confluence space first'}
+              >
+                Refresh data
+              </button>
+            )}
           </header>
 
           <nav style={navStyle} aria-label="Dashboard sections">
@@ -412,12 +582,28 @@ export default function App() {
             ))}
           </nav>
 
-          <ScopeControls
-            config={config}
-            releaseOptions={releaseOptions}
-            confluenceSpaceOptions={confluenceSpaceOptions}
-            onApply={(scope) => refresh(scope, { showLoading: true })}
+          <SnapshotLibrary
+            snapshots={savedSnapshots}
+            activeSnapshot={activeSnapshot}
+            loading={snapshotLoading}
+            saving={snapshotSaving}
+            error={snapshotError}
+            canSave={canSaveSnapshot}
+            suggestedTitle={suggestedSnapshotTitle}
+            onOpen={openSnapshot}
+            onSave={saveSnapshot}
+            onDelete={deleteSnapshot}
+            onClose={closeSnapshot}
           />
+
+          {!activeSnapshot ? (
+            <ScopeControls
+              config={config}
+              releaseOptions={releaseOptions}
+              confluenceSpaceOptions={confluenceSpaceOptions}
+              onApply={(scope) => refresh(scope, { showLoading: true })}
+            />
+          ) : null}
 
           {error ? (
             <div style={errorStyle}><strong>Live data unavailable</strong><div style={{ marginTop: 5 }}>{error}</div></div>
@@ -734,6 +920,11 @@ const rowMetaStyle = { color: COLORS.muted, fontSize: 12, marginTop: 4, lineHeig
 const sourceLinkStyle = { color: COLORS.blue, fontWeight: 700, textDecoration: 'none', whiteSpace: 'nowrap' };
 const sourceCardStyle = { padding: 16, border: `1px solid ${COLORS.border}`, borderRadius: 11, background: '#f7f8f9' };
 const scopePanelStyle = { ...panelStyle, display: 'flex', flexWrap: 'wrap', alignItems: 'end', justifyContent: 'space-between', gap: 20, marginBottom: 18 };
+const snapshotLibraryStyle = { ...scopePanelStyle, alignItems: 'flex-start', borderColor: '#85b8ff', background: '#f7fbff' };
+const snapshotWorkspaceStyle = { display: 'grid', gap: 12, flex: '1 1 760px' };
+const snapshotOpenStyle = { display: 'grid', gridTemplateColumns: 'minmax(260px, 1fr) auto auto', alignItems: 'end', gap: 10 };
+const snapshotSaveStyle = { display: 'grid', gridTemplateColumns: 'minmax(220px, 0.8fr) minmax(280px, 1.2fr) auto', alignItems: 'end', gap: 10, paddingTop: 12, borderTop: `1px solid ${COLORS.border}` };
+const savedSnapshotBannerStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 18, padding: 14, borderRadius: 10, color: COLORS.ink, background: COLORS.blueSoft, border: '1px solid #85b8ff' };
 const scopeTitleStyle = { color: COLORS.ink, fontSize: 16, fontWeight: 800 };
 const scopeHelpStyle = { color: COLORS.muted, fontSize: 12, lineHeight: 1.45, marginTop: 5 };
 const scopeFieldsStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', alignItems: 'end', gap: 12, flex: '1 1 680px' };
@@ -753,4 +944,7 @@ const sourceRowStyle = { ...listRowStyle, paddingRight: 14 };
 const emptyStateStyle = { padding: 16, border: '1px dashed #b3b9c4', borderRadius: 9, color: COLORS.muted, background: '#fafbfc', lineHeight: 1.5 };
 const preStyle = { whiteSpace: 'pre-wrap', wordBreak: 'break-word', padding: 14, borderRadius: 9, background: '#f1f2f4', color: COLORS.ink, border: 0 };
 const errorStyle = { marginBottom: 18, borderRadius: 10, border: '1px solid #f15b50', background: COLORS.redSoft, color: COLORS.red, padding: '14px 16px' };
+const successStyle = { borderRadius: 8, border: '1px solid #4bce97', background: COLORS.greenSoft, color: COLORS.green, padding: '10px 12px', fontSize: 12, fontWeight: 700 };
 const primaryButtonStyle = { minHeight: 40, borderRadius: 9, border: `1px solid ${COLORS.blue}`, background: COLORS.blue, color: '#fff', padding: '0 16px', cursor: 'pointer', fontWeight: 700, whiteSpace: 'nowrap' };
+const secondaryButtonStyle = { ...primaryButtonStyle, borderColor: COLORS.border, background: '#fff', color: COLORS.ink };
+const dangerButtonStyle = { ...secondaryButtonStyle, borderColor: '#f15b50', color: COLORS.red };

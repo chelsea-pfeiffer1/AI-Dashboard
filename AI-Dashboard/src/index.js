@@ -21,6 +21,9 @@ const SLACK_REMOTE_KEY = 'slack-api';
 const MAX_SLACK_CONVERSATIONS = 5;
 const MAX_SLACK_MESSAGES_PER_CONVERSATION = 15;
 const MAX_RELEASE_HISTORY_SNAPSHOTS = 20;
+const SAVED_DASHBOARD_INDEX_KEY = 'saved-dashboard-snapshot-index-v1';
+const SAVED_DASHBOARD_KEY_PREFIX = 'saved-dashboard-snapshot-v1:';
+const MAX_SAVED_DASHBOARDS = 30;
 
 const DEFAULT_FIELDS = [
   'summary',
@@ -727,6 +730,188 @@ async function recordReleaseHistory(releaseId, confluenceSpaceKey, currentSnapsh
   }
 }
 
+function compactSavedRisk(risk = {}) {
+  return {
+    id: normalizeText(risk.id || '').slice(0, 100),
+    title: normalizeText(risk.title || '').slice(0, 300),
+    severity: normalizeText(risk.severity || 'low'),
+    category: normalizeText(risk.category || 'other'),
+    description: normalizeText(risk.description || '').slice(0, 1500),
+    impact: normalizeText(risk.impact || '').slice(0, 1000),
+    likelihood: normalizeText(risk.likelihood || 'unknown'),
+    isBlocker: Boolean(risk.isBlocker),
+    decisionNeeded: Boolean(risk.decisionNeeded),
+    owner: normalizeText(risk.owner || 'Unassigned').slice(0, 200),
+    status: normalizeText(risk.status || '').slice(0, 200),
+    affectedIssueKeys: (Array.isArray(risk.affectedIssueKeys) ? risk.affectedIssueKeys : [])
+      .map((key) => normalizeText(key).slice(0, 50))
+      .filter(Boolean)
+      .slice(0, 25),
+    evidence: (Array.isArray(risk.evidence) ? risk.evidence : []).slice(0, 5).map((evidence) => ({
+      sourceSystem: normalizeText(evidence?.sourceSystem || ''),
+      sourceId: normalizeText(evidence?.sourceId || '').slice(0, 150),
+      title: normalizeText(evidence?.title || '').slice(0, 300),
+      url: normalizeText(evidence?.url || '').slice(0, 1000)
+    })),
+    recommendedAction: normalizeText(risk.recommendedAction || '').slice(0, 1000)
+  };
+}
+
+function compactSavedRecord(record = {}) {
+  return {
+    issueKey: normalizeText(record.issueKey || '').slice(0, 50),
+    issueType: normalizeText(record.issueType || '').slice(0, 100),
+    summary: normalizeText(record.summary || '').slice(0, 500),
+    status: normalizeText(record.status || '').slice(0, 150),
+    owner: normalizeText(record.owner || 'Unassigned').slice(0, 200),
+    priority: normalizeText(record.priority || '').slice(0, 100),
+    workstream: normalizeText(record.workstream || 'Unassigned workstream').slice(0, 200),
+    dueDate: normalizeText(record.dueDate || '').slice(0, 50),
+    sourceLink: normalizeText(record.sourceLink || '').slice(0, 1000),
+    risk: { label: normalizeText(record?.risk?.label || 'unknown') },
+    confidence: { label: normalizeText(record?.confidence?.label || 'unknown') }
+  };
+}
+
+function compactSavedDashboard(dashboard = {}) {
+  const aiAnalysis = dashboard.aiAnalysis && typeof dashboard.aiAnalysis === 'object'
+    ? {
+      executiveSummary: normalizeText(dashboard.aiAnalysis.executiveSummary || '').slice(0, 3000),
+      confidence: {
+        score: Number(dashboard.aiAnalysis?.confidence?.score || 0),
+        label: normalizeText(dashboard.aiAnalysis?.confidence?.label || 'insufficient_data'),
+        rationale: normalizeText(dashboard.aiAnalysis?.confidence?.rationale || '').slice(0, 2000)
+      },
+      risks: (Array.isArray(dashboard.aiAnalysis.risks) ? dashboard.aiAnalysis.risks : [])
+        .slice(0, 15)
+        .map(compactSavedRisk),
+      dataGaps: (Array.isArray(dashboard.aiAnalysis.dataGaps) ? dashboard.aiAnalysis.dataGaps : [])
+        .map((gap) => normalizeText(gap).slice(0, 500))
+        .filter(Boolean)
+        .slice(0, 10)
+    }
+    : null;
+
+  /*
+   * A saved version is intentionally an executive artifact, not a cache of the
+   * connected systems. It keeps the values rendered by the dashboard while
+   * omitting Jira descriptions, labels, raw Confluence bodies, Slack message
+   * text, conversation IDs, and the JQL used to build the live readout.
+   */
+  return {
+    scope: {
+      releaseId: normalizeText(dashboard?.scope?.releaseId || '').slice(0, 200),
+      team: normalizeText(dashboard?.scope?.team || '').slice(0, 200),
+      confluenceSpaceKey: normalizeText(dashboard?.scope?.confluenceSpaceKey || '').slice(0, 100),
+      slackConversationIds: []
+    },
+    summary: {
+      total: Number(dashboard?.summary?.total || 0),
+      visible: Number(dashboard?.summary?.visible || 0),
+      jql: '',
+      refreshedAt: normalizeText(dashboard?.summary?.refreshedAt || ''),
+      sourceSystem: 'Saved dashboard'
+    },
+    metrics: dashboard.metrics && typeof dashboard.metrics === 'object' ? dashboard.metrics : {},
+    workstreams: (Array.isArray(dashboard.workstreams) ? dashboard.workstreams : []).slice(0, 100),
+    actions: (Array.isArray(dashboard.actions) ? dashboard.actions : []).slice(0, 20),
+    aiSummary: normalizeText(dashboard.aiSummary || '').slice(0, 3000) || null,
+    aiAnalysis,
+    aiStatus: dashboard.aiStatus && typeof dashboard.aiStatus === 'object' ? dashboard.aiStatus : {},
+    baselineSnapshot: dashboard.baselineSnapshot && typeof dashboard.baselineSnapshot === 'object'
+      ? dashboard.baselineSnapshot
+      : {},
+    committedScope: dashboard.committedScope && typeof dashboard.committedScope === 'object'
+      ? dashboard.committedScope
+      : {},
+    releaseSnapshot: dashboard.releaseSnapshot && typeof dashboard.releaseSnapshot === 'object'
+      ? dashboard.releaseSnapshot
+      : {},
+    releaseTrend: {
+      ...(dashboard.releaseTrend && typeof dashboard.releaseTrend === 'object' ? dashboard.releaseTrend : {}),
+      history: (Array.isArray(dashboard?.releaseTrend?.history) ? dashboard.releaseTrend.history : []).slice(-12)
+    },
+    raidRegister: (Array.isArray(dashboard.raidRegister) ? dashboard.raidRegister : []).slice(0, 25),
+    dependencySignals: (Array.isArray(dashboard.dependencySignals) ? dashboard.dependencySignals : []).slice(0, 40),
+    readiness: dashboard.readiness && typeof dashboard.readiness === 'object' ? dashboard.readiness : {},
+    deliveryForecast: dashboard.deliveryForecast && typeof dashboard.deliveryForecast === 'object'
+      ? dashboard.deliveryForecast
+      : {},
+    sourceLinks: {
+      jira: dashboard?.sourceLinks?.jira ? {
+        system: 'Jira',
+        itemCount: Number(dashboard.sourceLinks.jira.itemCount || 0),
+        lastRefresh: normalizeText(dashboard.sourceLinks.jira.lastRefresh || '')
+      } : null,
+      confluence: dashboard?.sourceLinks?.confluence ? {
+        system: 'Confluence',
+        spaceKey: normalizeText(dashboard.sourceLinks.confluence.spaceKey || ''),
+        pageUrl: normalizeText(dashboard.sourceLinks.confluence.pageUrl || '').slice(0, 1000),
+        itemCount: Number(dashboard.sourceLinks.confluence.itemCount || 0),
+        lastRefresh: normalizeText(dashboard.sourceLinks.confluence.lastRefresh || ''),
+        error: normalizeText(dashboard.sourceLinks.confluence.error || '').slice(0, 500)
+      } : null,
+      slack: dashboard?.sourceLinks?.slack ? {
+        system: 'Slack',
+        itemCount: Number(dashboard.sourceLinks.slack.itemCount || 0),
+        lastRefresh: normalizeText(dashboard.sourceLinks.slack.lastRefresh || ''),
+        error: normalizeText(dashboard.sourceLinks.slack.error || '').slice(0, 500),
+        conversationIds: []
+      } : null,
+      openai: dashboard?.sourceLinks?.openai ? {
+        system: 'OpenAI',
+        model: normalizeText(dashboard.sourceLinks.openai.model || ''),
+        lastRefresh: normalizeText(dashboard.sourceLinks.openai.lastRefresh || '')
+      } : null
+    },
+    records: (Array.isArray(dashboard.records) ? dashboard.records : []).slice(0, 200).map(compactSavedRecord),
+    confluenceItems: (Array.isArray(dashboard.confluenceItems) ? dashboard.confluenceItems : []).slice(0, 100).map((item) => ({
+      id: normalizeText(item?.id || '').slice(0, 150),
+      title: normalizeText(item?.title || '').slice(0, 500),
+      type: normalizeText(item?.type || ''),
+      subtype: normalizeText(item?.subtype || ''),
+      parentId: normalizeText(item?.parentId || '').slice(0, 150) || null,
+      depth: Number(item?.depth || 0),
+      status: normalizeText(item?.status || ''),
+      updatedAt: normalizeText(item?.updatedAt || ''),
+      sourceUrl: normalizeText(item?.sourceUrl || '').slice(0, 1000)
+    })),
+    slackItems: [],
+    cardData: {},
+    cardStates: {
+      jira: dashboard?.cardStates?.jira || 'empty',
+      confluence: dashboard?.cardStates?.confluence || 'empty',
+      slack: dashboard?.cardStates?.slack || 'empty',
+      openai: dashboard?.cardStates?.openai || 'empty'
+    }
+  };
+}
+
+function savedDashboardKey(snapshotId) {
+  return `${SAVED_DASHBOARD_KEY_PREFIX}${snapshotId}`;
+}
+
+async function readSavedDashboardIndex() {
+  const index = await storage.get(SAVED_DASHBOARD_INDEX_KEY);
+  return Array.isArray(index) ? index.filter((item) => item?.id && item?.title) : [];
+}
+
+function savedDashboardMetadata(snapshot, accountId) {
+  return {
+    id: snapshot.id,
+    title: snapshot.title,
+    note: snapshot.note,
+    savedAt: snapshot.savedAt,
+    sourceRefreshedAt: snapshot.sourceRefreshedAt,
+    releaseId: snapshot.releaseId,
+    team: snapshot.team,
+    readiness: snapshot.readiness,
+    confidenceScore: snapshot.confidenceScore,
+    createdByAccountId: snapshot.createdByAccountId,
+    canDelete: Boolean(accountId && snapshot.createdByAccountId === accountId)
+  };
+}
+
 function stripHtml(value) {
   return String(value || '')
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -1371,6 +1556,113 @@ function buildEmptyDashboardResponse({ payload = {}, refreshedAt = new Date().to
     }
   };
 }
+
+resolver.define('listSavedDashboardSnapshots', async ({ context }) => {
+  const index = await readSavedDashboardIndex();
+  return {
+    snapshots: index.map((snapshot) => savedDashboardMetadata(snapshot, context?.accountId))
+  };
+});
+
+resolver.define('getSavedDashboardSnapshot', async ({ payload, context }) => {
+  const snapshotId = normalizeText(payload?.snapshotId || '');
+  if (!/^[a-f0-9-]{20,64}$/i.test(snapshotId)) {
+    throw new Error('Choose a valid saved dashboard.');
+  }
+
+  const snapshot = await storage.get(savedDashboardKey(snapshotId));
+  if (!snapshot?.dashboard) {
+    throw new Error('This saved dashboard is no longer available.');
+  }
+
+  return {
+    snapshot: {
+      ...savedDashboardMetadata(snapshot, context?.accountId),
+      dashboard: snapshot.dashboard
+    }
+  };
+});
+
+resolver.define('saveDashboardSnapshot', async ({ payload, context }) => {
+  const title = normalizeText(payload?.title || '').slice(0, 100);
+  const note = normalizeText(payload?.note || '').slice(0, 500);
+  const dashboard = compactSavedDashboard(payload?.dashboard || {});
+  const releaseId = normalizeText(dashboard?.scope?.releaseId || '');
+  const sourceRefreshedAt = normalizeText(dashboard?.summary?.refreshedAt || '');
+
+  if (!title) {
+    throw new Error('Enter a title for the saved dashboard.');
+  }
+  if (!releaseId || !sourceRefreshedAt) {
+    throw new Error('Generate a live dashboard before saving a version.');
+  }
+
+  const index = await readSavedDashboardIndex();
+  if (index.length >= MAX_SAVED_DASHBOARDS) {
+    throw new Error(`The snapshot library has reached its ${MAX_SAVED_DASHBOARDS}-version limit. Delete an older version before saving another.`);
+  }
+
+  const id = crypto.randomUUID();
+  const savedAt = new Date().toISOString();
+  const snapshot = {
+    id,
+    title,
+    note,
+    savedAt,
+    sourceRefreshedAt,
+    releaseId,
+    team: normalizeText(dashboard?.scope?.team || ''),
+    readiness: normalizeText(dashboard?.readiness?.recommendation || 'conditional'),
+    confidenceScore: dashboard?.aiAnalysis?.confidence?.score == null
+      ? null
+      : Number(dashboard.aiAnalysis.confidence.score),
+    createdByAccountId: normalizeText(context?.accountId || ''),
+    dashboard
+  };
+
+  // Forge storage values have a finite payload budget. Keeping a deliberate
+  // guard here gives the user a useful error instead of a provider-level failure.
+  if (Buffer.byteLength(JSON.stringify(snapshot), 'utf8') > 220000) {
+    throw new Error('This dashboard contains too much data to save safely. Reduce the release scope and try again.');
+  }
+
+  await storage.set(savedDashboardKey(id), snapshot);
+  try {
+    await storage.set(SAVED_DASHBOARD_INDEX_KEY, [
+      savedDashboardMetadata(snapshot, ''),
+      ...index
+    ]);
+  } catch (error) {
+    if (typeof storage.delete === 'function') {
+      await storage.delete(savedDashboardKey(id));
+    }
+    throw error;
+  }
+
+  return { snapshot: savedDashboardMetadata(snapshot, context?.accountId) };
+});
+
+resolver.define('deleteSavedDashboardSnapshot', async ({ payload, context }) => {
+  const snapshotId = normalizeText(payload?.snapshotId || '');
+  if (!/^[a-f0-9-]{20,64}$/i.test(snapshotId)) {
+    throw new Error('Choose a valid saved dashboard.');
+  }
+
+  const index = await readSavedDashboardIndex();
+  const existing = index.find((snapshot) => snapshot.id === snapshotId);
+  if (!existing) {
+    return { deleted: false };
+  }
+  if (!context?.accountId || existing.createdByAccountId !== context.accountId) {
+    throw new Error('Only the person who saved this dashboard can delete it.');
+  }
+
+  if (typeof storage.delete === 'function') {
+    await storage.delete(savedDashboardKey(snapshotId));
+  }
+  await storage.set(SAVED_DASHBOARD_INDEX_KEY, index.filter((snapshot) => snapshot.id !== snapshotId));
+  return { deleted: true };
+});
 
 resolver.define('getDashboardData', async ({ payload }) => {
   const settings = await readSettings();
