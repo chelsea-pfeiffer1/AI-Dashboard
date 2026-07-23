@@ -1,8 +1,9 @@
 export const dashboardTemplate = {
   filters: {
-    releaseId: 'VMSv26.06.00 (GA: 07/30)',
+    releaseId: '',
     team: 'VMS',
-    confluenceSpaceKey: 'PS',
+    confluenceSpaceKey: '',
+    slackConversationIds: '',
     view: 'Executive'
   },
   summary: {
@@ -23,6 +24,7 @@ export const dashboardTemplate = {
   workstreams: [],
   actions: [],
   confluenceItems: [],
+  slackItems: [],
   aiSummary: null,
   aiAnalysis: null,
   aiStatus: {
@@ -32,10 +34,41 @@ export const dashboardTemplate = {
   },
   releaseSnapshot: {
     sourceSystem: 'Jira',
-    releaseId: 'VMSv26.06.00 (GA: 07/30)',
+    releaseId: '',
     targetDate: '',
     daysUntilRelease: null,
     scheduleDataAvailable: false
+  },
+  releaseTrend: {
+    hasBaseline: false,
+    previousCapturedAt: '',
+    confidenceDelta: null,
+    totalDelta: null,
+    completedDelta: null,
+    blockedDelta: null,
+    highRiskDelta: null,
+    targetDateChanged: false,
+    previousTargetDate: '',
+    addedIssueKeys: [],
+    removedIssueKeys: [],
+    history: []
+  },
+  raidRegister: [],
+  dependencySignals: [],
+  readiness: {
+    recommendation: 'conditional',
+    failCount: 0,
+    warningCount: 0,
+    gates: []
+  },
+  deliveryForecast: {
+    state: 'insufficient_data',
+    expectedDate: '',
+    bestCaseDate: '',
+    worstCaseDate: '',
+    weeklyThroughput: 0,
+    probability: null,
+    rationale: 'Generate a readout to calculate a forecast.'
   },
   baselineSnapshot: {
     sourceSystem: 'Confluence',
@@ -48,17 +81,20 @@ export const dashboardTemplate = {
   sourceLinks: {
     jira: null,
     confluence: null,
+    slack: null,
     openai: null
   },
   cardData: {},
   cardStates: {
-    jira: 'loading',
-    confluence: 'loading',
-    openai: 'loading'
+    jira: 'empty',
+    confluence: 'empty',
+    slack: 'empty',
+    openai: 'empty'
   },
   scope: {
-    releaseId: 'VMSv26.06.00 (GA: 07/30)',
+    releaseId: '',
     team: 'VMS',
-    confluenceSpaceKey: 'PS'
+    confluenceSpaceKey: '',
+    slackConversationIds: []
   }
 };

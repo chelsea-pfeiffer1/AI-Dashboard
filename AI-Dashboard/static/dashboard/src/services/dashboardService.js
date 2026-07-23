@@ -1,11 +1,12 @@
 import { invoke } from '@forge/bridge';
 
-export async function getDashboardData({ releaseId, team, confluenceSpaceKey, view }) {
+export async function getDashboardData({ releaseId, team, confluenceSpaceKey, slackConversationIds, view }) {
   try {
     return await invoke('getDashboardData', {
       releaseId,
       team,
       confluenceSpaceKey,
+      slackConversationIds,
       view
     });
   } catch (error) {

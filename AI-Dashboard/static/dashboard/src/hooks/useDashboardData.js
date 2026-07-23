@@ -18,7 +18,13 @@ function readStoredConfig() {
     const parsed = JSON.parse(raw);
     return {
       ...dashboardTemplate.filters,
-      ...parsed
+      ...parsed,
+      // Release and space are intentionally session-scoped selections. Clearing
+      // them here prevents either a saved choice or an old default from silently
+      // determining which Jira and Confluence data loads on a later visit.
+      releaseId: '',
+      confluenceSpaceKey: '',
+      slackConversationIds: ''
     };
   } catch {
     return dashboardTemplate.filters;
@@ -58,6 +64,20 @@ function mergeDashboard(response) {
       ...dashboardTemplate.releaseSnapshot,
       ...(nextDashboard.releaseSnapshot || {})
     },
+    releaseTrend: {
+      ...dashboardTemplate.releaseTrend,
+      ...(nextDashboard.releaseTrend || {}),
+      history: Array.isArray(nextDashboard.releaseTrend?.history) ? nextDashboard.releaseTrend.history : []
+    },
+    readiness: {
+      ...dashboardTemplate.readiness,
+      ...(nextDashboard.readiness || {}),
+      gates: Array.isArray(nextDashboard.readiness?.gates) ? nextDashboard.readiness.gates : []
+    },
+    deliveryForecast: {
+      ...dashboardTemplate.deliveryForecast,
+      ...(nextDashboard.deliveryForecast || {})
+    },
     baselineSnapshot: {
       ...dashboardTemplate.baselineSnapshot,
       ...(nextDashboard.baselineSnapshot || {})
@@ -82,6 +102,9 @@ function mergeDashboard(response) {
     workstreams: Array.isArray(nextDashboard.workstreams) ? nextDashboard.workstreams : [],
     actions: Array.isArray(nextDashboard.actions) ? nextDashboard.actions : [],
     confluenceItems: Array.isArray(nextDashboard.confluenceItems) ? nextDashboard.confluenceItems : [],
+    slackItems: Array.isArray(nextDashboard.slackItems) ? nextDashboard.slackItems : [],
+    raidRegister: Array.isArray(nextDashboard.raidRegister) ? nextDashboard.raidRegister : [],
+    dependencySignals: Array.isArray(nextDashboard.dependencySignals) ? nextDashboard.dependencySignals : [],
     cardData: nextDashboard.cardData || {},
     aiSummary: nextDashboard.aiSummary || null,
     aiAnalysis: nextDashboard.aiAnalysis || null,
@@ -90,7 +113,9 @@ function mergeDashboard(response) {
 }
 
 export default function useDashboardData() {
-  const [loading, setLoading] = useState(true);
+  // Start on the scope picker. Data is loaded only after both required source
+  // fields have been explicitly supplied through "Generate readout".
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [config, setConfig] = useState(() => readStoredConfig());
   const [dashboard, setDashboard] = useState(dashboardTemplate);
@@ -114,7 +139,10 @@ export default function useDashboardData() {
         ...overrideConfig,
         releaseId: String((overrideConfig.releaseId ?? config.releaseId) || '').trim(),
         team: String((overrideConfig.team ?? config.team) || '').trim(),
-        confluenceSpaceKey: String((overrideConfig.confluenceSpaceKey ?? config.confluenceSpaceKey) || '').trim()
+        confluenceSpaceKey: String((overrideConfig.confluenceSpaceKey ?? config.confluenceSpaceKey) || '').trim(),
+        slackConversationIds: String(
+          (overrideConfig.slackConversationIds ?? config.slackConversationIds) || ''
+        ).trim()
       };
 
       if (showLoading) {
@@ -152,10 +180,6 @@ export default function useDashboardData() {
 
   const resetConfig = useCallback(() => {
     setConfig(dashboardTemplate.filters);
-  }, []);
-
-  useEffect(() => {
-    refresh({}, { showLoading: true });
   }, []);
 
   return useMemo(

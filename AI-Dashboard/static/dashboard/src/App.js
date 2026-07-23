@@ -61,6 +61,24 @@ function isActive(status) {
   return /progress|review|testing|qa|development/i.test(String(status || ''));
 }
 
+function formatDelta(value, suffix = '') {
+  if (value == null || Number.isNaN(Number(value))) return '—';
+  const number = Number(value);
+  return `${number > 0 ? '+' : ''}${number}${suffix}`;
+}
+
+function readinessLabel(value) {
+  return ({ ready: 'Ready', conditional: 'Conditional', not_ready: 'Not ready' })[value] || 'Not assessed';
+}
+
+function readinessTone(value) {
+  return value === 'ready' ? 'green' : value === 'not_ready' ? 'red' : 'amber';
+}
+
+function gateTone(value) {
+  return value === 'pass' ? 'green' : value === 'fail' ? 'red' : 'amber';
+}
+
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
@@ -190,28 +208,61 @@ function EmptyState({ children }) {
   return <div style={emptyStateStyle}>{children}</div>;
 }
 
+function ConfidenceTrend({ history }) {
+  const points = (Array.isArray(history) ? history : [])
+    .filter((snapshot) => snapshot.confidenceScore != null)
+    .slice(-12);
+  if (points.length < 2) {
+    return <EmptyState>A second snapshot is needed before a confidence trend can be drawn.</EmptyState>;
+  }
+
+  const coordinates = points.map((snapshot, index) => {
+    const x = points.length === 1 ? 0 : (index / (points.length - 1)) * 100;
+    const y = 100 - Math.max(0, Math.min(100, Number(snapshot.confidenceScore)));
+    return `${x},${y}`;
+  }).join(' ');
+
+  return (
+    <div>
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={trendChartStyle} role="img" aria-label="Release confidence history">
+        <line x1="0" y1="20" x2="100" y2="20" stroke={COLORS.border} strokeWidth="1" />
+        <line x1="0" y1="50" x2="100" y2="50" stroke={COLORS.border} strokeWidth="1" />
+        <line x1="0" y1="80" x2="100" y2="80" stroke={COLORS.border} strokeWidth="1" />
+        <polyline points={coordinates} fill="none" stroke={COLORS.blue} strokeWidth="3" vectorEffect="non-scaling-stroke" />
+      </svg>
+      <div style={rowMetaStyle}>{points.length} saved snapshots · latest {points[points.length - 1].confidenceScore}%</div>
+    </div>
+  );
+}
+
 function ScopeControls({ config, releaseOptions, confluenceSpaceOptions, onApply }) {
   const [releaseId, setReleaseId] = React.useState(config?.releaseId || '');
   const [spaceKey, setSpaceKey] = React.useState(config?.confluenceSpaceKey || '');
+  const [slackConversationIds, setSlackConversationIds] = React.useState(config?.slackConversationIds || '');
 
   React.useEffect(() => {
     setReleaseId(config?.releaseId || '');
     setSpaceKey(config?.confluenceSpaceKey || '');
-  }, [config?.releaseId, config?.confluenceSpaceKey]);
+    setSlackConversationIds(config?.slackConversationIds || '');
+  }, [config?.releaseId, config?.confluenceSpaceKey, config?.slackConversationIds]);
 
   const submit = (event) => {
     event.preventDefault();
     const nextRelease = releaseId.trim();
     const nextSpace = spaceKey.trim();
     if (!nextRelease || !nextSpace) return;
-    onApply({ releaseId: nextRelease, confluenceSpaceKey: nextSpace });
+    onApply({
+      releaseId: nextRelease,
+      confluenceSpaceKey: nextSpace,
+      slackConversationIds: slackConversationIds.trim()
+    });
   };
 
   return (
     <form onSubmit={submit} style={scopePanelStyle}>
       <div style={{ minWidth: 220 }}>
         <div style={scopeTitleStyle}>Readout scope</div>
-        <div style={scopeHelpStyle}>Choose the Jira release and Confluence knowledge source for the AI analysis.</div>
+        <div style={scopeHelpStyle}>Choose the Jira release, Confluence source, and optional Slack conversations for the AI analysis.</div>
       </div>
       <div style={scopeFieldsStyle}>
         <label style={fieldLabelStyle}>
@@ -244,6 +295,17 @@ function ScopeControls({ config, releaseOptions, confluenceSpaceOptions, onApply
             {(confluenceSpaceOptions || []).map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
           </datalist>
         </label>
+        <label style={fieldLabelStyle}>
+          <span>Slack conversations (optional)</span>
+          <input
+            type="text"
+            value={slackConversationIds}
+            onChange={(event) => setSlackConversationIds(event.target.value.toUpperCase())}
+            placeholder="C0123456789, G0123456789"
+            style={inputStyle}
+          />
+          <span style={{ ...scopeHelpStyle, marginTop: 0 }}>Up to five channel, private-channel, or DM conversation IDs.</span>
+        </label>
         <button type="submit" style={{ ...primaryButtonStyle, alignSelf: 'end' }}>Generate readout</button>
       </div>
     </form>
@@ -252,14 +314,21 @@ function ScopeControls({ config, releaseOptions, confluenceSpaceOptions, onApply
 
 export default function App() {
   const { loading, error, config, dashboard, refresh, releaseOptions, confluenceSpaceOptions } = useDashboardData();
+  const hasSelectedScope = Boolean(config?.releaseId && config?.confluenceSpaceKey);
   const summary = dashboard?.summary || {};
   const metrics = dashboard?.metrics || {};
   const releaseSnapshot = dashboard?.releaseSnapshot || {};
+  const releaseTrend = dashboard?.releaseTrend || {};
+  const readiness = dashboard?.readiness || {};
+  const deliveryForecast = dashboard?.deliveryForecast || {};
   const sourceLinks = dashboard?.sourceLinks || {};
   const cardStates = dashboard?.cardStates || {};
   const records = Array.isArray(dashboard?.records) ? dashboard.records : [];
   const actions = Array.isArray(dashboard?.actions) ? dashboard.actions : [];
   const confluenceItems = Array.isArray(dashboard?.confluenceItems) ? dashboard.confluenceItems : [];
+  const slackItems = Array.isArray(dashboard?.slackItems) ? dashboard.slackItems : [];
+  const raidRegister = Array.isArray(dashboard?.raidRegister) ? dashboard.raidRegister : [];
+  const dependencySignals = Array.isArray(dashboard?.dependencySignals) ? dashboard.dependencySignals : [];
   const aiAnalysis = dashboard?.aiAnalysis || null;
   const aiStatus = dashboard?.aiStatus || {};
   const aiRisks = Array.isArray(aiAnalysis?.risks) ? aiAnalysis.risks : [];
@@ -311,7 +380,15 @@ export default function App() {
                 <span>Updated {formatTimestamp(summary.refreshedAt)}</span>
               </div>
             </div>
-            <button type="button" onClick={() => refresh({}, { showLoading: true })} style={primaryButtonStyle}>Refresh data</button>
+            <button
+              type="button"
+              onClick={() => refresh({}, { showLoading: true })}
+              style={primaryButtonStyle}
+              disabled={!hasSelectedScope}
+              title={hasSelectedScope ? 'Refresh the selected release and space' : 'Choose a fix version and Confluence space first'}
+            >
+              Refresh data
+            </button>
           </header>
 
           <nav style={navStyle} aria-label="Dashboard sections">
@@ -319,6 +396,7 @@ export default function App() {
               ['overview', 'Overview'],
               ['release-confidence', 'Release Confidence'],
               ['project-health', 'Project Health'],
+              ['program-controls', 'PMO Controls'],
               ['risks-blockers', 'Risks & Blockers'],
               ['meeting-intelligence', 'Meeting Intelligence'],
               ['data-quality', 'Data Quality']
@@ -379,6 +457,8 @@ export default function App() {
                 <MetricCard label="High risk" value={analysisAvailable ? metrics.highRisk : '—'} detail="AI-identified risks" tone={analysisAvailable && metrics.highRisk > 0 ? 'red' : 'neutral'} />
                 <MetricCard label="Blockers" value={analysisAvailable ? metrics.blockers : '—'} detail="AI-confirmed blockers" tone={analysisAvailable && metrics.blockers > 0 ? 'red' : 'neutral'} />
                 <MetricCard label="Decisions" value={analysisAvailable ? metrics.decisionsNeeded : '—'} detail="Evidence indicates a decision is needed" tone={analysisAvailable && metrics.decisionsNeeded > 0 ? 'amber' : 'neutral'} />
+                <MetricCard label="Forecast" value={deliveryForecast.expectedDate ? formatDate(deliveryForecast.expectedDate) : 'Insufficient data'} detail={deliveryForecast.bestCaseDate ? `${formatDate(deliveryForecast.bestCaseDate)} to ${formatDate(deliveryForecast.worstCaseDate)} · ${deliveryForecast.rationale}` : deliveryForecast.rationale} tone={deliveryForecast.state === 'forecast' ? 'blue' : 'neutral'} />
+                <MetricCard label="On-time probability" value={deliveryForecast.probability == null ? '—' : `${deliveryForecast.probability}%`} detail="Heuristic based on recent completion rate, remaining scope, and blockers" tone={deliveryForecast.probability == null ? 'neutral' : deliveryForecast.probability >= 65 ? 'green' : deliveryForecast.probability >= 35 ? 'amber' : 'red'} />
               </div>
             </div>
           </Section>
@@ -397,6 +477,88 @@ export default function App() {
                 <MetricCard label="High risk" value={analysisAvailable ? highRisk : '—'} detail="AI-identified delivery risks" tone={highRisk > 0 ? 'red' : 'neutral'} />
                 <MetricCard label="Complete" value={completed} detail={`${completionPercent}% of release scope`} tone="green" />
                 <MetricCard label="In motion" value={active} detail="In progress, review, testing, or QA" tone="blue" />
+              </div>
+            </div>
+          </Section>
+
+          <Section id="program-controls" title="PMO Controls" description="Change history, governance gates, dependencies, and accountable actions for release oversight.">
+            <div style={twoColumnStyle}>
+              <div style={confidenceCardStyle}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'center' }}>
+                  <div>
+                    <div style={subsectionTitleStyle}>Release readiness</div>
+                    <div style={rowMetaStyle}>{readiness.failCount || 0} failed gates · {readiness.warningCount || 0} warnings</div>
+                  </div>
+                  <StatusPill tone={readinessTone(readiness.recommendation)}>{readinessLabel(readiness.recommendation)}</StatusPill>
+                </div>
+                <div style={{ marginTop: 14 }}>
+                  {(readiness.gates || []).map((gate) => (
+                    <div key={gate.id} style={compactControlRowStyle}>
+                      <div>
+                        <div style={rowTitleStyle}>{gate.name}</div>
+                        <div style={rowMetaStyle}>{gate.detail}</div>
+                      </div>
+                      <StatusPill tone={gateTone(gate.status)}>{gate.status}</StatusPill>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={confidenceCardStyle}>
+                <div style={subsectionTitleStyle}>Confidence and scope trend</div>
+                <ConfidenceTrend history={releaseTrend.history} />
+                <div style={{ ...compactMetricGridStyle, marginTop: 14 }}>
+                  <MetricCard label="Confidence change" value={formatDelta(releaseTrend.confidenceDelta, ' pts')} detail={releaseTrend.hasBaseline ? `Since ${formatTimestamp(releaseTrend.previousCapturedAt)}` : 'Baseline created by this readout'} tone={releaseTrend.confidenceDelta > 0 ? 'green' : releaseTrend.confidenceDelta < 0 ? 'red' : 'neutral'} />
+                  <MetricCard label="Completed change" value={formatDelta(releaseTrend.completedDelta)} detail="Since previous snapshot" tone={releaseTrend.completedDelta > 0 ? 'green' : 'neutral'} />
+                  <MetricCard label="New blockers" value={formatDelta(releaseTrend.blockedDelta)} detail="Net blocker change" tone={releaseTrend.blockedDelta > 0 ? 'red' : releaseTrend.blockedDelta < 0 ? 'green' : 'neutral'} />
+                  <MetricCard label="Scope churn" value={(releaseTrend.addedIssueKeys?.length || 0) + (releaseTrend.removedIssueKeys?.length || 0)} detail={`${releaseTrend.addedIssueKeys?.length || 0} added · ${releaseTrend.removedIssueKeys?.length || 0} removed`} tone={(releaseTrend.addedIssueKeys?.length || 0) ? 'amber' : 'neutral'} />
+                </div>
+                {releaseTrend.targetDateChanged ? (
+                  <div style={warningCalloutStyle}>Target date changed from {formatDate(releaseTrend.previousTargetDate)} to {formatDate(releaseSnapshot.targetDate)}.</div>
+                ) : null}
+                {(releaseTrend.addedIssueKeys?.length || releaseTrend.removedIssueKeys?.length) ? (
+                  <div style={evidenceListStyle}>
+                    {(releaseTrend.addedIssueKeys || []).map((key) => <a key={`added-${key}`} href={jiraUrl(key)} target="_blank" rel="noreferrer" style={evidenceLinkStyle}>+ {key}</a>)}
+                    {(releaseTrend.removedIssueKeys || []).map((key) => <a key={`removed-${key}`} href={jiraUrl(key)} target="_blank" rel="noreferrer" style={{ ...evidenceLinkStyle, color: COLORS.red, background: COLORS.redSoft }}>− {key}</a>)}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div style={{ ...twoColumnStyle, marginTop: 20 }}>
+              <div>
+                <div style={subsectionTitleStyle}>RAID and decision register ({raidRegister.length})</div>
+                {raidRegister.length ? raidRegister.map((entry) => (
+                  <div key={entry.id} style={controlCardStyle}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={rowTitleStyle}>{entry.title}</div>
+                        <div style={rowMetaStyle}>{entry.owner} · {entry.status}{entry.dueDate ? ` · Due ${formatDate(entry.dueDate)}` : ''}</div>
+                      </div>
+                      <StatusPill tone={toneForRisk(entry.severity)}>{entry.type}</StatusPill>
+                    </div>
+                    {entry.impact ? <div style={riskImpactStyle}><strong>Impact:</strong> {entry.impact}</div> : null}
+                    {entry.action ? <div style={riskImpactStyle}><strong>Next action:</strong> {entry.action}</div> : null}
+                    {entry.sourceUrl ? <a href={entry.sourceUrl} target="_blank" rel="noreferrer" style={{ ...sourceLinkStyle, display: 'inline-block', marginTop: 10 }}>Open evidence</a> : null}
+                  </div>
+                )) : <EmptyState>No RAID or decision entries were derived from the current evidence.</EmptyState>}
+              </div>
+              <div>
+                <div style={subsectionTitleStyle}>Dependency criticality ({dependencySignals.length})</div>
+                {dependencySignals.length ? dependencySignals.map((dependency) => (
+                  <div key={dependency.id} style={controlCardStyle}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={rowTitleStyle}>{dependency.sourceKey} {dependency.relationship} {dependency.targetKey}</div>
+                        <div style={rowMetaStyle}>{dependency.owner} · Target {dependency.targetStatus}{dependency.externalToRelease ? ' · Outside release scope' : ''}</div>
+                      </div>
+                      <StatusPill tone={dependency.criticality === 'critical' ? 'red' : dependency.criticality === 'watch' ? 'amber' : 'green'}>{dependency.criticality}</StatusPill>
+                    </div>
+                    <div style={evidenceListStyle}>
+                      <a href={dependency.sourceUrl || jiraUrl(dependency.sourceKey)} target="_blank" rel="noreferrer" style={evidenceLinkStyle}>{dependency.sourceKey}</a>
+                      <a href={dependency.targetUrl || jiraUrl(dependency.targetKey)} target="_blank" rel="noreferrer" style={evidenceLinkStyle}>{dependency.targetKey}</a>
+                    </div>
+                  </div>
+                )) : <EmptyState>No Jira issue dependencies were found in the selected release.</EmptyState>}
               </div>
             </div>
           </Section>
@@ -461,6 +623,14 @@ export default function App() {
             <div style={threeColumnStyle}>
               <SourceCard name="Jira" state={cardStates.jira} detail={`${total} release items`} refreshedAt={sourceLinks.jira?.lastRefresh} />
               <SourceCard name="Confluence" state={cardStates.confluence} detail={sourceLinks.confluence?.error || `${confluenceItems.length} source items from ${sourceLinks.confluence?.spaceKey || config?.confluenceSpaceKey}`} refreshedAt={sourceLinks.confluence?.lastRefresh} link={sourceLinks.confluence?.pageUrl} />
+              <SourceCard
+                name="Slack"
+                state={cardStates.slack}
+                detail={sourceLinks.slack?.error || (sourceLinks.slack?.conversationIds?.length
+                  ? `${slackItems.length} recent messages from ${sourceLinks.slack.conversationIds.length} selected conversations`
+                  : 'No Slack conversations selected')}
+                refreshedAt={sourceLinks.slack?.lastRefresh}
+              />
               <SourceCard name="AI analysis" state={cardStates.openai} detail={`${sourceLinks.openai?.model || 'Model unavailable'} · ${aiStatus.message || 'Status unavailable'}`} refreshedAt={sourceLinks.openai?.lastRefresh} />
             </div>
             <details style={detailsStyle}>
@@ -475,6 +645,20 @@ export default function App() {
                     {item.sourceUrl ? <a href={item.sourceUrl} target="_blank" rel="noreferrer" style={sourceLinkStyle}>Open source</a> : <span style={rowMetaStyle}>Link unavailable</span>}
                   </div>
                 )) : <EmptyState>No Confluence source lineage is available.</EmptyState>}
+              </div>
+            </details>
+            <details style={detailsStyle}>
+              <summary style={detailsSummaryStyle}>View Slack source lineage ({slackItems.length} messages)</summary>
+              <div style={{ marginTop: 12 }}>
+                {slackItems.length ? slackItems.map((item) => (
+                  <div key={`slack-${item.id}`} style={sourceRowStyle}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={rowTitleStyle}>{item.text || 'Message text unavailable'}</div>
+                      <div style={rowMetaStyle}>{item.conversationId} · {formatTimestamp(item.timestamp)} · Author {item.authorId}</div>
+                    </div>
+                    {item.sourceUrl ? <a href={item.sourceUrl} target="_blank" rel="noreferrer" style={sourceLinkStyle}>Open conversation</a> : <span style={rowMetaStyle}>Link unavailable</span>}
+                  </div>
+                )) : <EmptyState>No Slack messages were included in this analysis.</EmptyState>}
               </div>
             </details>
             <details style={detailsStyle}>
@@ -538,6 +722,7 @@ const twoColumnStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,
 const threeColumnStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 };
 const confidenceCardStyle = { padding: 20, background: '#f7f8f9', border: `1px solid ${COLORS.border}`, borderRadius: 12 };
 const confidenceScoreStyle = { fontSize: 46, fontWeight: 800, lineHeight: 1, margin: '10px 0 18px' };
+const trendChartStyle = { width: '100%', height: 150, display: 'block', background: '#fff', border: `1px solid ${COLORS.border}`, borderRadius: 8, marginTop: 10 };
 const progressTrackStyle = { height: 9, background: '#dfe1e6', borderRadius: 999, overflow: 'hidden' };
 const progressFillStyle = { height: '100%', borderRadius: 999, transition: 'width 250ms ease' };
 const pillStyle = { display: 'inline-flex', alignItems: 'center', borderRadius: 999, padding: '5px 9px', fontSize: 11, lineHeight: 1, fontWeight: 800, textTransform: 'capitalize', whiteSpace: 'nowrap' };
@@ -559,6 +744,9 @@ const riskDescriptionStyle = { marginTop: 12, color: COLORS.ink, lineHeight: 1.5
 const riskImpactStyle = { marginTop: 9, color: '#44546f', fontSize: 13, lineHeight: 1.5 };
 const evidenceListStyle = { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 13 };
 const evidenceLinkStyle = { color: COLORS.blue, background: COLORS.blueSoft, padding: '5px 8px', borderRadius: 6, fontSize: 11, fontWeight: 700, textDecoration: 'none' };
+const compactControlRowStyle = { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, padding: '11px 0', borderBottom: `1px solid ${COLORS.border}` };
+const controlCardStyle = { padding: 15, border: `1px solid ${COLORS.border}`, borderRadius: 10, background: '#fafbfc', marginBottom: 10 };
+const warningCalloutStyle = { marginTop: 12, padding: '10px 12px', color: COLORS.amber, background: COLORS.amberSoft, borderRadius: 8, fontSize: 12, fontWeight: 700 };
 const detailsStyle = { marginTop: 14, border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: '12px 14px', background: '#fafbfc' };
 const detailsSummaryStyle = { cursor: 'pointer', fontWeight: 700, color: COLORS.ink };
 const sourceRowStyle = { ...listRowStyle, paddingRight: 14 };

@@ -10,6 +10,44 @@ modules:
   function:
     - key: resolver
       handler: index.handler
+      providers:
+        auth:
+          - slack
+
+providers:
+  auth:
+    - key: slack
+      name: Slack
+      type: oauth2
+      clientId: "${SLACK_CLIENT_ID}"
+      scopes:
+        - channels:history
+        - groups:history
+        - im:history
+        - mpim:history
+      remotes:
+        - slack-api
+      bearerMethod: authorization-header
+      actions:
+        authorization:
+          remote: slack-api
+          path: /oauth/v2/authorize
+        exchange:
+          remote: slack-api
+          path: /api/oauth.v2.access
+        revokeToken:
+          remote: slack-api
+          path: /api/auth.revoke
+        retrieveProfile:
+          remote: slack-api
+          path: /api/auth.test
+          resolvers:
+            id: team_id
+            displayName: team
+
+remotes:
+  - key: slack-api
+    baseUrl: https://slack.com
 
 permissions:
   scopes:
@@ -29,6 +67,7 @@ permissions:
     fetch:
       backend:
         - address: https://api.openai.com
+        - address: https://slack.com
 
 resources:
   - key: main
@@ -40,3 +79,7 @@ app:
     memoryMB: 256
     architecture: arm64
   id: ari:cloud:ecosystem::app/83d30c9b-ec7c-4bf9-92ab-b7c2ae7b90f2
+
+environment:
+  variables:
+    - SLACK_CLIENT_ID

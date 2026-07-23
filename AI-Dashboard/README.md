@@ -23,10 +23,11 @@ You must be able to view the selected Jira work and Confluence space. If content
 
 1. In **Jira fix version**, select a suggestion or enter the exact fix-version name used in Jira. Names are case- and character-sensitive enough that copying the Jira value is safest.
 2. In **Confluence space**, select or enter the space key, such as `PS`. Use the short key from the space URL, not the full space name. The field converts the key to uppercase.
-3. Select **Generate readout**.
-4. Review the release name, team, Confluence space, and updated time at the top of the page to confirm the intended scope loaded.
+3. Optionally enter up to five Slack conversation IDs in **Slack conversations**. Use the `C...`, `G...`, or `D...` ID from each Slack conversation link. The Slack app must be a member of any private conversation it reads.
+4. Select **Generate readout**. The first Slack-backed request prompts the current user to connect Slack through Forge-managed OAuth.
+5. Review the release name, team, Confluence space, and updated time at the top of the page to confirm the intended scope loaded.
 
-The browser remembers the last selected release and space for the next visit on that device. Select **Refresh data** to rerun the current readout with the latest source data.
+The release, space, and Slack conversation fields start blank on each visit. Select **Refresh data** to rerun the current readout with the latest source data after generating it once.
 
 ## Read the dashboard
 
@@ -69,6 +70,18 @@ Shows the current delivery flow:
 
 Counts reflect the Jira data at the updated time shown in the header.
 
+### PMO Controls
+
+Provides a governance-oriented view for program managers and stakeholders:
+
+- **Release readiness** evaluates schedule, blockers, critical defects, open decisions, scope completion, and supporting evidence. The result is **Ready**, **Conditional**, or **Not ready**.
+- **Confidence and scope trend** compares the current readout with the preceding saved snapshot. It reports changes in confidence, completed scope, blockers, target date, and issue membership.
+- **RAID and decision register** consolidates AI-supported risks and decisions with blocked Jira items and critical dependencies. Entries retain owners, status, due dates, actions, and evidence links when those fields are available.
+- **Dependency criticality** ranks Jira issue links as normal, watch, or critical. A critical signal means the relationship appears blocking and is also blocked, overdue, or associated with high risk; it is a decision-support signal rather than a complete critical-path calculation.
+- **Delivery forecast** uses Jira resolution dates from the last 42 days to estimate recent weekly throughput and best-case, expected, and worst-case completion dates. The on-time percentage is a transparent heuristic and is omitted when the source history is insufficient.
+
+The app stores at most 20 compact snapshots per release and Confluence-space combination. Snapshots contain issue keys and aggregate delivery metrics only; Confluence bodies, Slack messages, Jira descriptions, and AI narrative content are not stored in release history.
+
 ### Risks and Blockers
 
 Lists evidence-backed risks and recommended actions. Each risk may include:
@@ -76,7 +89,7 @@ Lists evidence-backed risks and recommended actions. Each risk may include:
 - Severity and whether it is considered a blocker
 - A description of the risk and its possible impact
 - A recommended action, owner, or decision request when the sources provide one
-- Evidence links to the supporting Jira issue or Confluence content
+- Evidence links to the supporting Jira issue, Confluence content, or selected Slack conversation
 
 Use the evidence links to validate the source context. The **Executive decisions** list is generated from risks that require a decision or contain a recommended action; it is not a separate approval system and does not update Jira.
 
@@ -90,8 +103,9 @@ Select **Open** to review a source in Confluence. **Captured follow-ups** repeat
 
 Use this section before sharing or acting on the readout.
 
-- **Jira**, **Confluence**, and **AI analysis** cards show whether each source returned usable data and when it was refreshed.
+- **Jira**, **Confluence**, **Slack**, and **AI analysis** cards show whether each source returned usable data and when it was refreshed.
 - **View source lineage** lists the Confluence items included in the readout and links back to them.
+- **View Slack source lineage** lists the recent messages supplied to the analysis and links back to their selected conversations.
 - **View Jira query** shows the exact JQL used to select release issues.
 - **View AI data gaps** lists missing or weak evidence that limited the analysis.
 
@@ -187,6 +201,16 @@ forge lint
 forge deploy --non-interactive -e development
 forge install --non-interactive --site <site-url> --product confluence --environment development
 ```
+
+### Configure Slack OAuth
+
+1. Create a Slack app with a bot user and add `channels:history`, `groups:history`, `im:history`, and `mpim:history` under **OAuth & Permissions**.
+2. Add `https://id.atlassian.com/outboundAuth/finish` as the Slack app's OAuth redirect URL.
+3. Export the Slack app client ID as `SLACK_CLIENT_ID` before running Forge CLI commands so the manifest variable can be resolved.
+4. Configure the client secret in Forge with `forge providers configure slack -e development`.
+5. Deploy the app, upgrade the Confluence installation, and install the Slack app into the workspace. Invite the Slack bot only to private channels or conversations that should be eligible for release analysis.
+
+The dashboard does not list or search Slack conversations. It calls `conversations.history` only for IDs entered by the user, reads at most 15 recent messages per ID, and includes at most five IDs in one analysis. Slack may apply stricter rate limits to non-Marketplace apps.
 
 Use `forge install --non-interactive --upgrade` after changing app scopes or permissions. Ordinary code-only updates require a new deployment but not an installation upgrade.
 
