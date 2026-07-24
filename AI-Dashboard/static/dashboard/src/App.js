@@ -238,13 +238,11 @@ function ConfidenceTrend({ history }) {
 function ScopeControls({ config, releaseOptions, confluenceSpaceOptions, onApply }) {
   const [releaseId, setReleaseId] = React.useState(config?.releaseId || '');
   const [spaceKey, setSpaceKey] = React.useState(config?.confluenceSpaceKey || '');
-  const [slackConversationIds, setSlackConversationIds] = React.useState(config?.slackConversationIds || '');
 
   React.useEffect(() => {
     setReleaseId(config?.releaseId || '');
     setSpaceKey(config?.confluenceSpaceKey || '');
-    setSlackConversationIds(config?.slackConversationIds || '');
-  }, [config?.releaseId, config?.confluenceSpaceKey, config?.slackConversationIds]);
+  }, [config?.releaseId, config?.confluenceSpaceKey]);
 
   const submit = (event) => {
     event.preventDefault();
@@ -253,8 +251,7 @@ function ScopeControls({ config, releaseOptions, confluenceSpaceOptions, onApply
     if (!nextRelease || !nextSpace) return;
     onApply({
       releaseId: nextRelease,
-      confluenceSpaceKey: nextSpace,
-      slackConversationIds: slackConversationIds.trim()
+      confluenceSpaceKey: nextSpace
     });
   };
 
@@ -262,7 +259,7 @@ function ScopeControls({ config, releaseOptions, confluenceSpaceOptions, onApply
     <form onSubmit={submit} style={scopePanelStyle}>
       <div style={{ minWidth: 220 }}>
         <div style={scopeTitleStyle}>Readout scope</div>
-        <div style={scopeHelpStyle}>Choose the Jira release, Confluence source, and optional Slack conversations for the AI analysis.</div>
+        <div style={scopeHelpStyle}>Choose the Jira release and Confluence source for the AI analysis.</div>
       </div>
       <div style={scopeFieldsStyle}>
         <label style={fieldLabelStyle}>
@@ -294,17 +291,6 @@ function ScopeControls({ config, releaseOptions, confluenceSpaceOptions, onApply
           <datalist id="confluence-space-options">
             {(confluenceSpaceOptions || []).map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
           </datalist>
-        </label>
-        <label style={fieldLabelStyle}>
-          <span>Slack conversations (optional)</span>
-          <input
-            type="text"
-            value={slackConversationIds}
-            onChange={(event) => setSlackConversationIds(event.target.value.toUpperCase())}
-            placeholder="C0123456789, G0123456789"
-            style={inputStyle}
-          />
-          <span style={{ ...scopeHelpStyle, marginTop: 0 }}>Up to five channel, private-channel, or DM conversation IDs.</span>
         </label>
         <button type="submit" style={{ ...primaryButtonStyle, alignSelf: 'end' }}>Generate readout</button>
       </div>
@@ -370,7 +356,7 @@ function SnapshotLibrary({
       <div style={{ minWidth: 230 }}>
         <div style={scopeTitleStyle}>Executive snapshot library</div>
         <div style={scopeHelpStyle}>
-          Open a frozen status view by name—no Jira release, Confluence space, or Slack conversation IDs required.
+          Open a frozen status view by name—no Jira release or Confluence space details required.
         </div>
       </div>
       <div style={snapshotWorkspaceStyle}>
@@ -488,7 +474,6 @@ export default function App() {
   const records = Array.isArray(dashboard?.records) ? dashboard.records : [];
   const actions = Array.isArray(dashboard?.actions) ? dashboard.actions : [];
   const confluenceItems = Array.isArray(dashboard?.confluenceItems) ? dashboard.confluenceItems : [];
-  const slackItems = Array.isArray(dashboard?.slackItems) ? dashboard.slackItems : [];
   const raidRegister = Array.isArray(dashboard?.raidRegister) ? dashboard.raidRegister : [];
   const dependencySignals = Array.isArray(dashboard?.dependencySignals) ? dashboard.dependencySignals : [];
   const aiAnalysis = dashboard?.aiAnalysis || null;
@@ -809,14 +794,6 @@ export default function App() {
             <div style={threeColumnStyle}>
               <SourceCard name="Jira" state={cardStates.jira} detail={`${total} release items`} refreshedAt={sourceLinks.jira?.lastRefresh} />
               <SourceCard name="Confluence" state={cardStates.confluence} detail={sourceLinks.confluence?.error || `${confluenceItems.length} source items from ${sourceLinks.confluence?.spaceKey || config?.confluenceSpaceKey}`} refreshedAt={sourceLinks.confluence?.lastRefresh} link={sourceLinks.confluence?.pageUrl} />
-              <SourceCard
-                name="Slack"
-                state={cardStates.slack}
-                detail={sourceLinks.slack?.error || (sourceLinks.slack?.conversationIds?.length
-                  ? `${slackItems.length} recent messages from ${sourceLinks.slack.conversationIds.length} selected conversations`
-                  : 'No Slack conversations selected')}
-                refreshedAt={sourceLinks.slack?.lastRefresh}
-              />
               <SourceCard name="AI analysis" state={cardStates.openai} detail={`${sourceLinks.openai?.model || 'Model unavailable'} · ${aiStatus.message || 'Status unavailable'}`} refreshedAt={sourceLinks.openai?.lastRefresh} />
             </div>
             <details style={detailsStyle}>
@@ -831,20 +808,6 @@ export default function App() {
                     {item.sourceUrl ? <a href={item.sourceUrl} target="_blank" rel="noreferrer" style={sourceLinkStyle}>Open source</a> : <span style={rowMetaStyle}>Link unavailable</span>}
                   </div>
                 )) : <EmptyState>No Confluence source lineage is available.</EmptyState>}
-              </div>
-            </details>
-            <details style={detailsStyle}>
-              <summary style={detailsSummaryStyle}>View Slack source lineage ({slackItems.length} messages)</summary>
-              <div style={{ marginTop: 12 }}>
-                {slackItems.length ? slackItems.map((item) => (
-                  <div key={`slack-${item.id}`} style={sourceRowStyle}>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={rowTitleStyle}>{item.text || 'Message text unavailable'}</div>
-                      <div style={rowMetaStyle}>{item.conversationId} · {formatTimestamp(item.timestamp)} · Author {item.authorId}</div>
-                    </div>
-                    {item.sourceUrl ? <a href={item.sourceUrl} target="_blank" rel="noreferrer" style={sourceLinkStyle}>Open conversation</a> : <span style={rowMetaStyle}>Link unavailable</span>}
-                  </div>
-                )) : <EmptyState>No Slack messages were included in this analysis.</EmptyState>}
               </div>
             </details>
             <details style={detailsStyle}>

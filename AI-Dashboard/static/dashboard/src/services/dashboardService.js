@@ -16,13 +16,12 @@ function normalizeInvokeError(error, fallbackMessage) {
   return new Error(fallbackMessage);
 }
 
-export async function getDashboardData({ releaseId, team, confluenceSpaceKey, slackConversationIds, view }) {
+export async function getDashboardData({ releaseId, team, confluenceSpaceKey, view }) {
   try {
     return await invoke('getDashboardData', {
       releaseId,
       team,
       confluenceSpaceKey,
-      slackConversationIds,
       view
     });
   } catch (error) {

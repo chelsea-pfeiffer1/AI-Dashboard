@@ -29,8 +29,7 @@ function readStoredConfig() {
       // them here prevents either a saved choice or an old default from silently
       // determining which Jira and Confluence data loads on a later visit.
       releaseId: '',
-      confluenceSpaceKey: '',
-      slackConversationIds: ''
+      confluenceSpaceKey: ''
     };
   } catch {
     return dashboardTemplate.filters;
@@ -108,7 +107,6 @@ function mergeDashboard(response) {
     workstreams: Array.isArray(nextDashboard.workstreams) ? nextDashboard.workstreams : [],
     actions: Array.isArray(nextDashboard.actions) ? nextDashboard.actions : [],
     confluenceItems: Array.isArray(nextDashboard.confluenceItems) ? nextDashboard.confluenceItems : [],
-    slackItems: Array.isArray(nextDashboard.slackItems) ? nextDashboard.slackItems : [],
     raidRegister: Array.isArray(nextDashboard.raidRegister) ? nextDashboard.raidRegister : [],
     dependencySignals: Array.isArray(nextDashboard.dependencySignals) ? nextDashboard.dependencySignals : [],
     cardData: nextDashboard.cardData || {},
@@ -167,10 +165,7 @@ export default function useDashboardData() {
         ...overrideConfig,
         releaseId: String((overrideConfig.releaseId ?? config.releaseId) || '').trim(),
         team: String((overrideConfig.team ?? config.team) || '').trim(),
-        confluenceSpaceKey: String((overrideConfig.confluenceSpaceKey ?? config.confluenceSpaceKey) || '').trim(),
-        slackConversationIds: String(
-          (overrideConfig.slackConversationIds ?? config.slackConversationIds) || ''
-        ).trim()
+        confluenceSpaceKey: String((overrideConfig.confluenceSpaceKey ?? config.confluenceSpaceKey) || '').trim()
       };
 
       if (showLoading) {

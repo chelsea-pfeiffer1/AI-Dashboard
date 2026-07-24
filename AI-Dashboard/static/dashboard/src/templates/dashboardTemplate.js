@@ -3,7 +3,6 @@ export const dashboardTemplate = {
     releaseId: '',
     team: 'VMS',
     confluenceSpaceKey: '',
-    slackConversationIds: '',
     view: 'Executive'
   },
   summary: {
@@ -24,7 +23,6 @@ export const dashboardTemplate = {
   workstreams: [],
   actions: [],
   confluenceItems: [],
-  slackItems: [],
   aiSummary: null,
   aiAnalysis: null,
   aiStatus: {
@@ -81,20 +79,17 @@ export const dashboardTemplate = {
   sourceLinks: {
     jira: null,
     confluence: null,
-    slack: null,
     openai: null
   },
   cardData: {},
   cardStates: {
     jira: 'empty',
     confluence: 'empty',
-    slack: 'empty',
     openai: 'empty'
   },
   scope: {
     releaseId: '',
     team: 'VMS',
-    confluenceSpaceKey: '',
-    slackConversationIds: []
+    confluenceSpaceKey: ''
   }
 };
