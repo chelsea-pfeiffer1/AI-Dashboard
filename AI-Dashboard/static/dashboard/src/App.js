@@ -95,6 +95,154 @@ function jiraUrl(issueKey) {
   return issueKey ? `https://365retailmarkets.atlassian.net/browse/${encodeURIComponent(issueKey)}` : '';
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function snapshotFileName(title) {
+  const normalized = String(title || 'release-snapshot')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+  return `${normalized || 'release-snapshot'}.html`;
+}
+
+function buildSnapshotHtml(snapshot, dashboard) {
+  const records = Array.isArray(dashboard?.records) ? dashboard.records : [];
+  const risks = Array.isArray(dashboard?.aiAnalysis?.risks) ? dashboard.aiAnalysis.risks : [];
+  const raidEntries = Array.isArray(dashboard?.raidRegister) ? dashboard.raidRegister : [];
+  const dependencies = Array.isArray(dashboard?.dependencySignals) ? dashboard.dependencySignals : [];
+  const readinessGates = Array.isArray(dashboard?.readiness?.gates) ? dashboard.readiness.gates : [];
+  const completed = records.filter((record) => isDone(record.status)).length;
+  const completionPercent = records.length ? Math.round((completed / records.length) * 100) : 0;
+  const confidence = dashboard?.aiAnalysis?.confidence;
+
+  const listItems = (items, render) => items.length
+    ? items.map((item, index) => `<li>${render(item, index)}</li>`).join('')
+    : '<li class="empty">None reported.</li>';
+
+  const issueRows = records.length
+    ? records.map((record) => `
+      <tr>
+        <td><a href="${escapeHtml(record.sourceLink || jiraUrl(record.issueKey))}">${escapeHtml(record.issueKey)}</a></td>
+        <td>${escapeHtml(record.summary)}</td>
+        <td>${escapeHtml(record.status)}</td>
+        <td>${escapeHtml(record.owner)}</td>
+        <td>${escapeHtml(record.priority)}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="5" class="empty">No Jira issues were saved in this snapshot.</td></tr>';
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>${escapeHtml(snapshot?.title || 'Release snapshot')}</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, Arial, sans-serif; color: #172b4d; background: #f4f5f7; }
+    body { margin: 0; padding: 32px; }
+    main { max-width: 1120px; margin: auto; }
+    header, section { background: white; border: 1px solid #dfe1e6; border-radius: 12px; padding: 22px; margin-bottom: 18px; }
+    h1 { margin: 0 0 8px; font-size: 30px; }
+    h2 { margin: 0 0 14px; font-size: 20px; }
+    h3 { margin-bottom: 6px; }
+    p, li { line-height: 1.5; }
+    .muted, .empty { color: #626f86; }
+    .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+    .metric { background: #f7f8f9; border-radius: 9px; padding: 14px; }
+    .metric strong { display: block; font-size: 25px; margin-top: 5px; }
+    .gate { display: flex; justify-content: space-between; gap: 16px; border-top: 1px solid #dfe1e6; padding: 10px 0; }
+    .pill { display: inline-block; border-radius: 999px; padding: 4px 8px; background: #e9f2ff; color: #0c66e4; font-weight: 700; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; border-bottom: 1px solid #dfe1e6; padding: 10px 8px; vertical-align: top; }
+    a { color: #0c66e4; }
+    @media print { body { padding: 0; background: white; } header, section { break-inside: avoid; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="pill">Saved executive snapshot</div>
+    <h1>${escapeHtml(snapshot?.title || 'Release snapshot')}</h1>
+    ${snapshot?.note ? `<p>${escapeHtml(snapshot.note)}</p>` : ''}
+    <p class="muted">Saved ${escapeHtml(formatTimestamp(snapshot?.savedAt))} · Source data from ${escapeHtml(formatTimestamp(snapshot?.sourceRefreshedAt || dashboard?.summary?.refreshedAt))}</p>
+    <p><strong>Release:</strong> ${escapeHtml(dashboard?.scope?.releaseId || 'Unknown')} · <strong>Team:</strong> ${escapeHtml(dashboard?.scope?.team || 'Unknown')} · <strong>Confluence:</strong> ${escapeHtml(dashboard?.scope?.confluenceSpaceKey || 'Unknown')}</p>
+  </header>
+
+  <section>
+    <h2>Executive overview</h2>
+    <div class="metrics">
+      <div class="metric">Release scope<strong>${records.length}</strong></div>
+      <div class="metric">Completed<strong>${completed} (${completionPercent}%)</strong></div>
+      <div class="metric">Confidence<strong>${confidence?.score == null ? 'Unavailable' : `${escapeHtml(confidence.score)}%`}</strong></div>
+      <div class="metric">Readiness<strong>${escapeHtml(readinessLabel(dashboard?.readiness?.recommendation))}</strong></div>
+      <div class="metric">Target date<strong>${escapeHtml(formatDate(dashboard?.releaseSnapshot?.targetDate))}</strong></div>
+      <div class="metric">Forecast<strong>${escapeHtml(formatDate(dashboard?.deliveryForecast?.expectedDate))}</strong></div>
+    </div>
+    <h3>Executive readout</h3>
+    <p>${escapeHtml(dashboard?.aiSummary || dashboard?.aiStatus?.message || 'AI analysis was unavailable for this snapshot.')}</p>
+    ${confidence?.rationale ? `<h3>Confidence rationale</h3><p>${escapeHtml(confidence.rationale)}</p>` : ''}
+  </section>
+
+  <section>
+    <h2>Release readiness</h2>
+    ${readinessGates.length ? readinessGates.map((gate) => `
+      <div class="gate">
+        <div><strong>${escapeHtml(gate.name)}</strong><div class="muted">${escapeHtml(gate.detail)}</div></div>
+        <span class="pill">${escapeHtml(gate.status)}</span>
+      </div>`).join('') : '<p class="empty">No readiness gates were saved.</p>'}
+  </section>
+
+  <section>
+    <h2>Evidence-backed risks</h2>
+    <ul>${listItems(risks, (risk) => `<strong>${escapeHtml(risk.title)}</strong> (${escapeHtml(risk.severity)}) — ${escapeHtml(risk.description)}${risk.recommendedAction ? `<br><strong>Action:</strong> ${escapeHtml(risk.recommendedAction)}` : ''}`)}</ul>
+  </section>
+
+  <section>
+    <h2>RAID and decisions</h2>
+    <ul>${listItems(raidEntries, (entry) => `<strong>${escapeHtml(entry.title)}</strong> — ${escapeHtml(entry.owner)} · ${escapeHtml(entry.status)}${entry.action ? `<br><strong>Action:</strong> ${escapeHtml(entry.action)}` : ''}`)}</ul>
+  </section>
+
+  <section>
+    <h2>Dependencies</h2>
+    <ul>${listItems(dependencies, (dependency) => `<strong>${escapeHtml(dependency.sourceKey)} ${escapeHtml(dependency.relationship)} ${escapeHtml(dependency.targetKey)}</strong> — ${escapeHtml(dependency.criticality)} · ${escapeHtml(dependency.targetStatus)}`)}</ul>
+  </section>
+
+  <section>
+    <h2>Jira release scope</h2>
+    <table>
+      <thead><tr><th>Issue</th><th>Summary</th><th>Status</th><th>Owner</th><th>Priority</th></tr></thead>
+      <tbody>${issueRows}</tbody>
+    </table>
+  </section>
+
+  <section>
+    <p class="muted">This is a frozen dashboard export. Confirm material decisions in the linked Jira and Confluence sources.</p>
+  </section>
+</main>
+</body>
+</html>`;
+}
+
+function downloadSnapshot(snapshot, dashboard) {
+  const blob = new Blob([buildSnapshotHtml(snapshot, dashboard)], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = snapshotFileName(snapshot?.title);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 class AppErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -325,6 +473,7 @@ function SnapshotLibrary({
   onOpen,
   onSave,
   onDelete,
+  onDownload,
   onClose
 }) {
   const [selectedId, setSelectedId] = React.useState('');
@@ -417,7 +566,10 @@ function SnapshotLibrary({
               </div>
               {activeSnapshot.note ? <div style={{ marginTop: 7 }}>{activeSnapshot.note}</div> : null}
             </div>
-            <button type="button" style={secondaryButtonStyle} onClick={onClose}>Return to live setup</button>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <button type="button" style={primaryButtonStyle} onClick={onDownload}>Download snapshot</button>
+              <button type="button" style={secondaryButtonStyle} onClick={onClose}>Return to live setup</button>
+            </div>
           </div>
         ) : (
           <form onSubmit={submitSave} style={snapshotSaveStyle}>
@@ -595,6 +747,7 @@ export default function App() {
             onOpen={openSnapshot}
             onSave={saveSnapshot}
             onDelete={deleteSnapshot}
+            onDownload={() => downloadSnapshot(activeSnapshot, dashboard)}
             onClose={closeSnapshot}
           />
 

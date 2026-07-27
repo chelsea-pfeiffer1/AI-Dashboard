@@ -38,6 +38,8 @@ After generating a live readout, use **Executive snapshot library** to preserve 
 
 Saved versions appear by title whenever an authorized user opens the installed dashboard. An executive can select one and choose **Open saved view** without knowing the Jira fix version or Confluence space used to prepare it. The saved banner shows both when the version was saved and when its source data was last refreshed.
 
+While viewing a saved version, select **Download snapshot** to save a self-contained HTML report. The downloaded report can be opened offline or printed to PDF and includes the executive overview, readiness gates, risks, RAID entries, dependencies, and concise Jira release scope stored in that saved view.
+
 Saved versions are frozen reports and do not refresh automatically. Return to the live setup and generate a new readout before saving the next status update. Up to 30 versions can be retained for one app installation; only the person who saved a version can delete it.
 
 The saved executive artifact contains the displayed status, aggregate metrics, concise issue fields, risk analysis, PMO controls, and evidence links. It deliberately excludes Jira descriptions, Jira labels, Confluence page bodies, and the generated JQL. Anyone who can open the installed global dashboard can view its saved versions, subject to the site's normal app access.
