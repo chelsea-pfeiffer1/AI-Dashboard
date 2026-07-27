@@ -1,5 +1,7 @@
 import React from 'react';
 import useDashboardData from './hooks/useDashboardData';
+import { buildDashboardViewModel } from './domain/dashboardViewModel';
+import { isActiveStatus, isBlockedStatus, isDoneStatus } from './domain/statusRules';
 
 const COLORS = {
   ink: '#172b4d',
@@ -54,13 +56,11 @@ function formatConfluenceType(item) {
 }
 
 function isDone(status) {
-  const normalizedStatus = String(status || '').trim();
-  return ['ready for release', 'abandoned'].includes(normalizedStatus.toLowerCase())
-    || /done|closed|resolved|complete|released/i.test(normalizedStatus);
+  return isDoneStatus(status);
 }
 
 function isActive(status) {
-  return /progress|review|testing|qa|development/i.test(String(status || ''));
+  return isActiveStatus(status);
 }
 
 function formatDelta(value, suffix = '') {
@@ -388,13 +388,11 @@ function ConfidenceTrend({ history }) {
 function ScopeControls({ config, releaseOptions, confluenceSpaceOptions, onApply }) {
   const [releaseId, setReleaseId] = React.useState(config?.releaseId || '');
   const [spaceKey, setSpaceKey] = React.useState(config?.confluenceSpaceKey || '');
-  const [slackConversationIds, setSlackConversationIds] = React.useState(config?.slackConversationIds || '');
 
   React.useEffect(() => {
     setReleaseId(config?.releaseId || '');
     setSpaceKey(config?.confluenceSpaceKey || '');
-    setSlackConversationIds(config?.slackConversationIds || '');
-  }, [config?.releaseId, config?.confluenceSpaceKey, config?.slackConversationIds]);
+  }, [config?.releaseId, config?.confluenceSpaceKey]);
 
   const submit = (event) => {
     event.preventDefault();
@@ -403,8 +401,7 @@ function ScopeControls({ config, releaseOptions, confluenceSpaceOptions, onApply
     if (!nextRelease || !nextSpace) return;
     onApply({
       releaseId: nextRelease,
-      confluenceSpaceKey: nextSpace,
-      slackConversationIds: slackConversationIds.trim()
+      confluenceSpaceKey: nextSpace
     });
   };
 
@@ -412,7 +409,7 @@ function ScopeControls({ config, releaseOptions, confluenceSpaceOptions, onApply
     <form onSubmit={submit} style={scopePanelStyle}>
       <div style={{ minWidth: 220 }}>
         <div style={scopeTitleStyle}>Readout scope</div>
-        <div style={scopeHelpStyle}>Choose the Jira release, Confluence source, and optional Slack conversations for the AI analysis.</div>
+        <div style={scopeHelpStyle}>Choose the Jira release and Confluence source for the AI analysis.</div>
       </div>
       <div style={scopeFieldsStyle}>
         <label style={fieldLabelStyle}>
@@ -444,17 +441,6 @@ function ScopeControls({ config, releaseOptions, confluenceSpaceOptions, onApply
           <datalist id="confluence-space-options">
             {(confluenceSpaceOptions || []).map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
           </datalist>
-        </label>
-        <label style={fieldLabelStyle}>
-          <span>Slack conversations (optional)</span>
-          <input
-            type="text"
-            value={slackConversationIds}
-            onChange={(event) => setSlackConversationIds(event.target.value.toUpperCase())}
-            placeholder="C0123456789, G0123456789"
-            style={inputStyle}
-          />
-          <span style={{ ...scopeHelpStyle, marginTop: 0 }}>Up to five channel, private-channel, or DM conversation IDs.</span>
         </label>
         <button type="submit" style={{ ...primaryButtonStyle, alignSelf: 'end' }}>Generate readout</button>
       </div>
@@ -521,7 +507,7 @@ function SnapshotLibrary({
       <div style={{ minWidth: 230 }}>
         <div style={scopeTitleStyle}>Executive snapshot library</div>
         <div style={scopeHelpStyle}>
-          Open a frozen status view by name—no Jira release, Confluence space, or Slack conversation IDs required.
+          Open a frozen status view by name—no Jira release or Confluence space selection required.
         </div>
       </div>
       <div style={snapshotWorkspaceStyle}>
@@ -633,38 +619,9 @@ export default function App() {
   const hasSelectedScope = Boolean(config?.releaseId && config?.confluenceSpaceKey);
   const summary = dashboard?.summary || {};
   const metrics = dashboard?.metrics || {};
-  const releaseSnapshot = dashboard?.releaseSnapshot || {};
-  const releaseTrend = dashboard?.releaseTrend || {};
-  const readiness = dashboard?.readiness || {};
-  const deliveryForecast = dashboard?.deliveryForecast || {};
-  const sourceLinks = dashboard?.sourceLinks || {};
-  const cardStates = dashboard?.cardStates || {};
-  const records = Array.isArray(dashboard?.records) ? dashboard.records : [];
-  const actions = Array.isArray(dashboard?.actions) ? dashboard.actions : [];
-  const confluenceItems = Array.isArray(dashboard?.confluenceItems) ? dashboard.confluenceItems : [];
-  const slackItems = Array.isArray(dashboard?.slackItems) ? dashboard.slackItems : [];
-  const raidRegister = Array.isArray(dashboard?.raidRegister) ? dashboard.raidRegister : [];
-  const dependencySignals = Array.isArray(dashboard?.dependencySignals) ? dashboard.dependencySignals : [];
   const aiAnalysis = dashboard?.aiAnalysis || null;
   const aiStatus = dashboard?.aiStatus || {};
-  const aiRisks = Array.isArray(aiAnalysis?.risks) ? aiAnalysis.risks : [];
   const analysisAvailable = Boolean(aiAnalysis && metrics.analysisAvailable);
-
-  const total = records.length;
-  const completed = records.filter((record) => isDone(record.status)).length;
-  const active = records.filter((record) => isActive(record.status)).length;
-  const blocked = records.filter((record) => /blocked|blocker/i.test(String(record.status || ''))).length;
-  const highRisk = records.filter((record) => record?.risk?.label === 'high').length;
-  const notStarted = Math.max(total - completed - active, 0);
-  const completionPercent = total ? Math.round((completed / total) * 100) : 0;
-  const confidenceScore = analysisAvailable ? clamp(Number(aiAnalysis?.confidence?.score || 0), 0, 100) : 0;
-  const confidenceLabel = analysisAvailable
-    ? ({ on_track: 'On track', watch: 'Watch', at_risk: 'At risk', insufficient_data: 'Insufficient data' }[aiAnalysis?.confidence?.label] || 'Unknown')
-    : 'Awaiting AI';
-  const confidenceTone = !analysisAvailable ? 'neutral' : confidenceScore >= 80 ? 'green' : confidenceScore >= 60 ? 'amber' : 'red';
-  const meetingItems = confluenceItems.filter((item) =>
-    item?.subtype === 'live' || /meeting|standup|sync|weekly|retro|minutes|agenda|planning|status update/i.test(item?.title || '')
-  );
   const canSaveSnapshot = Boolean(
     !activeSnapshot
     && summary.refreshedAt
@@ -723,13 +680,9 @@ export default function App() {
 
           <nav style={navStyle} aria-label="Dashboard sections">
             {[
-              ['overview', 'Overview'],
-              ['release-confidence', 'Release Confidence'],
-              ['project-health', 'Project Health'],
-              ['program-controls', 'PMO Controls'],
-              ['risks-blockers', 'Risks & Blockers'],
-              ['meeting-intelligence', 'Meeting Intelligence'],
-              ['data-quality', 'Data Quality']
+              ['overview', 'Release overview'],
+              ['risks-actions', 'AI risks & actions'],
+              ['supporting-details', 'Supporting details']
             ].map(([id, label]) => (
               <button
                 key={id}
@@ -770,260 +723,220 @@ export default function App() {
             <div style={errorStyle}><strong>Live data unavailable</strong><div style={{ marginTop: 5 }}>{error}</div></div>
           ) : null}
 
-          <Section id="overview" title="Overview" description="The current executive view of release scope and progress.">
-            <div style={metricGridStyle}>
-              <MetricCard label="Release scope" value={total} detail="Stories and bugs" tone="blue" />
-              <MetricCard label="Completed" value={completed} detail={`${completionPercent}% of scope`} tone="green" />
-              <MetricCard label="In motion" value={active} detail="In progress or review" />
-              <MetricCard label="Confluence sources" value={confluenceItems.length} detail={`Pages and live docs from ${dashboard?.scope?.confluenceSpaceKey || config?.confluenceSpaceKey}`} />
-            </div>
-            <div style={summaryCalloutStyle}>
-              <div style={calloutLabelStyle}>Executive readout</div>
-              <div style={summaryStyle}>{dashboard?.aiSummary || aiStatus.message || 'AI analysis is not available yet.'}</div>
-            </div>
-          </Section>
-
-          <Section id="release-confidence" title="Release Confidence" description="AI assessment of Jira release work against the target date, informed by Confluence meeting transcripts.">
-            <div style={twoColumnStyle}>
-              <div style={confidenceCardStyle}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16 }}>
-                  <div>
-                    <div style={metricLabelStyle}>Current confidence</div>
-                    <div style={{ ...confidenceScoreStyle, color: confidenceTone === 'neutral' ? COLORS.muted : COLORS[confidenceTone] }}>
-                      {analysisAvailable ? `${confidenceScore}%` : '—'}
-                    </div>
-                  </div>
-                  <StatusPill tone={confidenceTone}>{confidenceLabel}</StatusPill>
-                </div>
-                <ProgressBar value={confidenceScore} tone={confidenceTone} />
-                <div style={metricDetailStyle}>{aiAnalysis?.confidence?.rationale || aiStatus.message || 'Waiting for AI analysis.'}</div>
-              </div>
-              <div style={compactMetricGridStyle}>
-                <MetricCard label="Target release" value={formatDate(releaseSnapshot.targetDate)} detail={releaseTimingDetail(releaseSnapshot)} tone={releaseSnapshot.scheduleDataAvailable ? 'blue' : 'neutral'} />
-                <MetricCard label="Scope complete" value={`${completionPercent}%`} detail={`${completed} of ${total}`} tone="green" />
-                <MetricCard label="High risk" value={analysisAvailable ? metrics.highRisk : '—'} detail="AI-identified risks" tone={analysisAvailable && metrics.highRisk > 0 ? 'red' : 'neutral'} />
-                <MetricCard label="Blockers" value={analysisAvailable ? metrics.blockers : '—'} detail="AI-confirmed blockers" tone={analysisAvailable && metrics.blockers > 0 ? 'red' : 'neutral'} />
-                <MetricCard label="Decisions" value={analysisAvailable ? metrics.decisionsNeeded : '—'} detail="Evidence indicates a decision is needed" tone={analysisAvailable && metrics.decisionsNeeded > 0 ? 'amber' : 'neutral'} />
-                <MetricCard label="Forecast" value={deliveryForecast.expectedDate ? formatDate(deliveryForecast.expectedDate) : 'Insufficient data'} detail={deliveryForecast.bestCaseDate ? `${formatDate(deliveryForecast.bestCaseDate)} to ${formatDate(deliveryForecast.worstCaseDate)} · ${deliveryForecast.rationale}` : deliveryForecast.rationale} tone={deliveryForecast.state === 'forecast' ? 'blue' : 'neutral'} />
-                <MetricCard label="On-time probability" value={deliveryForecast.probability == null ? '—' : `${deliveryForecast.probability}%`} detail="Heuristic based on recent completion rate, remaining scope, and blockers" tone={deliveryForecast.probability == null ? 'neutral' : deliveryForecast.probability >= 65 ? 'green' : deliveryForecast.probability >= 35 ? 'amber' : 'red'} />
-              </div>
-            </div>
-          </Section>
-
-          <Section id="project-health" title="Project Health" description="Delivery flow and health by workstream.">
-            <div style={statusStripStyle}>
-              <div><strong>{completed}</strong><span>Complete</span></div>
-              <div><strong>{active}</strong><span>In motion</span></div>
-              <div><strong>{notStarted}</strong><span>Other / not started</span></div>
-            </div>
-            <ProgressBar value={completionPercent} tone="blue" />
-            <div style={{ marginTop: 22 }}>
-              <div style={subsectionTitleStyle}>Workstream health</div>
-              <div style={metricGridStyle}>
-                <MetricCard label="Blocked" value={blocked} detail="Items currently stopped" tone={blocked > 0 ? 'red' : 'neutral'} />
-                <MetricCard label="High risk" value={analysisAvailable ? highRisk : '—'} detail="AI-identified delivery risks" tone={highRisk > 0 ? 'red' : 'neutral'} />
-                <MetricCard label="Complete" value={completed} detail={`${completionPercent}% of release scope`} tone="green" />
-                <MetricCard label="In motion" value={active} detail="In progress, review, testing, or QA" tone="blue" />
-              </div>
-            </div>
-          </Section>
-
-          <Section id="program-controls" title="PMO Controls" description="Change history, governance gates, dependencies, and accountable actions for release oversight.">
-            <div style={twoColumnStyle}>
-              <div style={confidenceCardStyle}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'center' }}>
-                  <div>
-                    <div style={subsectionTitleStyle}>Release readiness</div>
-                    <div style={rowMetaStyle}>{readiness.failCount || 0} failed gates · {readiness.warningCount || 0} warnings</div>
-                  </div>
-                  <StatusPill tone={readinessTone(readiness.recommendation)}>{readinessLabel(readiness.recommendation)}</StatusPill>
-                </div>
-                <div style={{ marginTop: 14 }}>
-                  {(readiness.gates || []).map((gate) => (
-                    <div key={gate.id} style={compactControlRowStyle}>
-                      <div>
-                        <div style={rowTitleStyle}>{gate.name}</div>
-                        <div style={rowMetaStyle}>{gate.detail}</div>
-                      </div>
-                      <StatusPill tone={gateTone(gate.status)}>{gate.status}</StatusPill>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div style={confidenceCardStyle}>
-                <div style={subsectionTitleStyle}>Confidence and scope trend</div>
-                <ConfidenceTrend history={releaseTrend.history} />
-                <div style={{ ...compactMetricGridStyle, marginTop: 14 }}>
-                  <MetricCard label="Confidence change" value={formatDelta(releaseTrend.confidenceDelta, ' pts')} detail={releaseTrend.hasBaseline ? `Since ${formatTimestamp(releaseTrend.previousCapturedAt)}` : 'Baseline created by this readout'} tone={releaseTrend.confidenceDelta > 0 ? 'green' : releaseTrend.confidenceDelta < 0 ? 'red' : 'neutral'} />
-                  <MetricCard label="Completed change" value={formatDelta(releaseTrend.completedDelta)} detail="Since previous snapshot" tone={releaseTrend.completedDelta > 0 ? 'green' : 'neutral'} />
-                  <MetricCard label="New blockers" value={formatDelta(releaseTrend.blockedDelta)} detail="Net blocker change" tone={releaseTrend.blockedDelta > 0 ? 'red' : releaseTrend.blockedDelta < 0 ? 'green' : 'neutral'} />
-                  <MetricCard label="Scope churn" value={(releaseTrend.addedIssueKeys?.length || 0) + (releaseTrend.removedIssueKeys?.length || 0)} detail={`${releaseTrend.addedIssueKeys?.length || 0} added · ${releaseTrend.removedIssueKeys?.length || 0} removed`} tone={(releaseTrend.addedIssueKeys?.length || 0) ? 'amber' : 'neutral'} />
-                </div>
-                {releaseTrend.targetDateChanged ? (
-                  <div style={warningCalloutStyle}>Target date changed from {formatDate(releaseTrend.previousTargetDate)} to {formatDate(releaseSnapshot.targetDate)}.</div>
-                ) : null}
-                {(releaseTrend.addedIssueKeys?.length || releaseTrend.removedIssueKeys?.length) ? (
-                  <div style={evidenceListStyle}>
-                    {(releaseTrend.addedIssueKeys || []).map((key) => <a key={`added-${key}`} href={jiraUrl(key)} target="_blank" rel="noreferrer" style={evidenceLinkStyle}>+ {key}</a>)}
-                    {(releaseTrend.removedIssueKeys || []).map((key) => <a key={`removed-${key}`} href={jiraUrl(key)} target="_blank" rel="noreferrer" style={{ ...evidenceLinkStyle, color: COLORS.red, background: COLORS.redSoft }}>− {key}</a>)}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-
-            <div style={{ ...twoColumnStyle, marginTop: 20 }}>
-              <div>
-                <div style={subsectionTitleStyle}>RAID and decision register ({raidRegister.length})</div>
-                {raidRegister.length ? raidRegister.map((entry) => (
-                  <div key={entry.id} style={controlCardStyle}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={rowTitleStyle}>{entry.title}</div>
-                        <div style={rowMetaStyle}>{entry.owner} · {entry.status}{entry.dueDate ? ` · Due ${formatDate(entry.dueDate)}` : ''}</div>
-                      </div>
-                      <StatusPill tone={toneForRisk(entry.severity)}>{entry.type}</StatusPill>
-                    </div>
-                    {entry.impact ? <div style={riskImpactStyle}><strong>Impact:</strong> {entry.impact}</div> : null}
-                    {entry.action ? <div style={riskImpactStyle}><strong>Next action:</strong> {entry.action}</div> : null}
-                    {entry.sourceUrl ? <a href={entry.sourceUrl} target="_blank" rel="noreferrer" style={{ ...sourceLinkStyle, display: 'inline-block', marginTop: 10 }}>Open evidence</a> : null}
-                  </div>
-                )) : <EmptyState>No RAID or decision entries were derived from the current evidence.</EmptyState>}
-              </div>
-              <div>
-                <div style={subsectionTitleStyle}>Dependency criticality ({dependencySignals.length})</div>
-                {dependencySignals.length ? dependencySignals.map((dependency) => (
-                  <div key={dependency.id} style={controlCardStyle}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={rowTitleStyle}>{dependency.sourceKey} {dependency.relationship} {dependency.targetKey}</div>
-                        <div style={rowMetaStyle}>{dependency.owner} · Target {dependency.targetStatus}{dependency.externalToRelease ? ' · Outside release scope' : ''}</div>
-                      </div>
-                      <StatusPill tone={dependency.criticality === 'critical' ? 'red' : dependency.criticality === 'watch' ? 'amber' : 'green'}>{dependency.criticality}</StatusPill>
-                    </div>
-                    <div style={evidenceListStyle}>
-                      <a href={dependency.sourceUrl || jiraUrl(dependency.sourceKey)} target="_blank" rel="noreferrer" style={evidenceLinkStyle}>{dependency.sourceKey}</a>
-                      <a href={dependency.targetUrl || jiraUrl(dependency.targetKey)} target="_blank" rel="noreferrer" style={evidenceLinkStyle}>{dependency.targetKey}</a>
-                    </div>
-                  </div>
-                )) : <EmptyState>No Jira issue dependencies were found in the selected release.</EmptyState>}
-              </div>
-            </div>
-          </Section>
-
-          <Section id="risks-blockers" title="Risks and Blockers" description="The items most likely to affect release confidence or require an executive decision.">
-            <div style={metricGridStyle}>
-              <MetricCard label="High risk" value={analysisAvailable ? metrics.highRisk : '—'} tone={analysisAvailable && metrics.highRisk ? 'red' : 'neutral'} />
-              <MetricCard label="Medium risk" value={analysisAvailable ? metrics.mediumRisk : '—'} tone={analysisAvailable && metrics.mediumRisk ? 'amber' : 'neutral'} />
-              <MetricCard label="Blocked" value={analysisAvailable ? metrics.blockers : '—'} tone={analysisAvailable && metrics.blockers ? 'red' : 'neutral'} />
-              <MetricCard label="Decisions needed" value={analysisAvailable ? metrics.decisionsNeeded : '—'} tone={analysisAvailable && metrics.decisionsNeeded ? 'amber' : 'neutral'} />
-            </div>
-            <div style={{ ...twoColumnStyle, marginTop: 20 }}>
-              <div>
-                <div style={subsectionTitleStyle}>Evidence-backed risks</div>
-                {aiRisks.length ? aiRisks.map((risk) => <AiRiskCard key={risk.id} risk={risk} />) : <EmptyState>{analysisAvailable ? 'The AI analysis did not identify evidence-supported risks.' : aiStatus.message || 'AI risk analysis is unavailable.'}</EmptyState>}
-              </div>
-              <div>
-                <div style={subsectionTitleStyle}>Executive decisions</div>
-                {actions.length ? actions.map((action, index) => (
-                  <div key={`${action.issueKey || action.summary}-${index}`} style={listRowStyle}>
-                    <div style={{ minWidth: 0 }}>
-                      {(action.sourceUrl || action.issueKey) ? <a href={action.sourceUrl || jiraUrl(action.issueKey)} target="_blank" rel="noreferrer" style={sourceLinkStyle}>{action.issueKey || 'Open evidence'}</a> : null}
-                      <div style={{ ...rowTitleStyle, marginTop: 4 }}>{action.summary}</div>
-                      <div style={rowMetaStyle}>{action.owner} · {action.status}</div>
-                    </div>
-                  </div>
-                )) : <EmptyState>No decision or approval items were detected.</EmptyState>}
-              </div>
-            </div>
-          </Section>
-
-          <Section id="meeting-intelligence" title="Meeting Intelligence" description="Meeting artifacts and follow-ups discovered beneath the Parlevel Confluence page.">
-            <div style={twoColumnStyle}>
-              <div>
-                <div style={subsectionTitleStyle}>Relevant meeting sources</div>
-                {meetingItems.length ? meetingItems.map((item) => (
-                  <div key={`${item.type}-${item.id}`} style={listRowStyle}>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={rowTitleStyle}>{item.title || 'Untitled'}</div>
-                      <div style={rowMetaStyle}>{formatConfluenceType(item)}{item.updatedAt ? ` · Updated ${formatTimestamp(item.updatedAt)}` : ''}</div>
-                    </div>
-                    {item.sourceUrl ? <a href={item.sourceUrl} target="_blank" rel="noreferrer" style={sourceLinkStyle}>Open</a> : null}
-                  </div>
-                )) : <EmptyState>No meeting notes, live docs, or agendas were detected in the current Confluence tree.</EmptyState>}
-              </div>
-              <div>
-                <div style={subsectionTitleStyle}>Captured follow-ups</div>
-                {actions.length ? actions.slice(0, 6).map((action, index) => (
-                  <div key={`meeting-${action.issueKey || action.summary}-${index}`} style={listRowStyle}>
-                    <div>
-                      <div style={rowTitleStyle}>{action.summary}</div>
-                      <div style={rowMetaStyle}>{action.owner} · {action.status}</div>
-                    </div>
-                    {(action.sourceUrl || action.issueKey) ? <a href={action.sourceUrl || jiraUrl(action.issueKey)} target="_blank" rel="noreferrer" style={sourceLinkStyle}>{action.issueKey || 'Open evidence'}</a> : null}
-                  </div>
-                )) : <EmptyState>No decision-oriented Jira follow-ups were detected.</EmptyState>}
-              </div>
-            </div>
-          </Section>
-
-          <Section id="data-quality" title="Data Quality" description="Freshness, source availability, and traceability behind this dashboard.">
-            <div style={threeColumnStyle}>
-              <SourceCard name="Jira" state={cardStates.jira} detail={`${total} release items`} refreshedAt={sourceLinks.jira?.lastRefresh} />
-              <SourceCard name="Confluence" state={cardStates.confluence} detail={sourceLinks.confluence?.error || `${confluenceItems.length} source items from ${sourceLinks.confluence?.spaceKey || config?.confluenceSpaceKey}`} refreshedAt={sourceLinks.confluence?.lastRefresh} link={sourceLinks.confluence?.pageUrl} />
-              <SourceCard
-                name="Slack"
-                state={cardStates.slack}
-                detail={sourceLinks.slack?.error || (sourceLinks.slack?.conversationIds?.length
-                  ? `${slackItems.length} recent messages from ${sourceLinks.slack.conversationIds.length} selected conversations`
-                  : 'No Slack conversations selected')}
-                refreshedAt={sourceLinks.slack?.lastRefresh}
-              />
-              <SourceCard name="AI analysis" state={cardStates.openai} detail={`${sourceLinks.openai?.model || 'Model unavailable'} · ${aiStatus.message || 'Status unavailable'}`} refreshedAt={sourceLinks.openai?.lastRefresh} />
-            </div>
-            <details style={detailsStyle}>
-              <summary style={detailsSummaryStyle}>View source lineage ({confluenceItems.length} Confluence items)</summary>
-              <div style={{ marginTop: 12 }}>
-                {confluenceItems.length ? confluenceItems.map((item) => (
-                  <div key={`source-${item.type}-${item.id}`} style={{ ...sourceRowStyle, paddingLeft: 14 + Math.min(Number(item.depth || 0), 6) * 16 }}>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={rowTitleStyle}>{item.title || 'Untitled'}</div>
-                      <div style={rowMetaStyle}>{formatConfluenceType(item)} · ID {item.id}</div>
-                    </div>
-                    {item.sourceUrl ? <a href={item.sourceUrl} target="_blank" rel="noreferrer" style={sourceLinkStyle}>Open source</a> : <span style={rowMetaStyle}>Link unavailable</span>}
-                  </div>
-                )) : <EmptyState>No Confluence source lineage is available.</EmptyState>}
-              </div>
-            </details>
-            <details style={detailsStyle}>
-              <summary style={detailsSummaryStyle}>View Slack source lineage ({slackItems.length} messages)</summary>
-              <div style={{ marginTop: 12 }}>
-                {slackItems.length ? slackItems.map((item) => (
-                  <div key={`slack-${item.id}`} style={sourceRowStyle}>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={rowTitleStyle}>{item.text || 'Message text unavailable'}</div>
-                      <div style={rowMetaStyle}>{item.conversationId} · {formatTimestamp(item.timestamp)} · Author {item.authorId}</div>
-                    </div>
-                    {item.sourceUrl ? <a href={item.sourceUrl} target="_blank" rel="noreferrer" style={sourceLinkStyle}>Open conversation</a> : <span style={rowMetaStyle}>Link unavailable</span>}
-                  </div>
-                )) : <EmptyState>No Slack messages were included in this analysis.</EmptyState>}
-              </div>
-            </details>
-            <details style={detailsStyle}>
-              <summary style={detailsSummaryStyle}>View Jira query</summary>
-              <pre style={{ ...preStyle, marginTop: 12 }}>{sourceLinks.jira?.jql || 'JQL unavailable'}</pre>
-            </details>
-            <details style={detailsStyle}>
-              <summary style={detailsSummaryStyle}>View AI data gaps ({aiAnalysis?.dataGaps?.length || 0})</summary>
-              <div style={{ marginTop: 12 }}>
-                {aiAnalysis?.dataGaps?.length ? aiAnalysis.dataGaps.map((gap, index) => (
-                  <div key={`${gap}-${index}`} style={listRowStyle}>{gap}</div>
-                )) : <EmptyState>No AI data gaps were reported.</EmptyState>}
-              </div>
-            </details>
-          </Section>
+          <DashboardContent dashboard={dashboard} config={config} />
         </div>
       </div>
     </AppErrorBoundary>
+  );
+}
+
+function DashboardContent({ dashboard, config }) {
+  const {
+    summary, metrics, releaseSnapshot, releaseTrend, readiness, deliveryForecast,
+    sourceLinks, cardStates, records, actions, confluenceItems, raidRegister,
+    aiAnalysis, aiStatus, aiRisks, analysisAvailable, total, completed, active,
+    blocked, completionPercent, confidenceScore, confidenceLabel, confidenceTone,
+    warningGates, additionalDependencies
+  } = buildDashboardViewModel(dashboard);
+
+  return (
+    <>
+      <Section id="overview" title="Release overview" description="The release decision in one place.">
+        <div style={metricGridStyle}>
+          <MetricCard label="Release scope" value={total} detail="Stories and bugs" tone="blue" />
+          <MetricCard label="Completed" value={`${completionPercent}%`} detail={`${completed} of ${total}`} tone="green" />
+          <MetricCard label="In motion" value={active} detail="In progress or review" tone="blue" />
+          <MetricCard label="Blocked issues" value={blocked} detail="Jira items currently stopped" tone={blocked ? 'red' : 'neutral'} />
+          <MetricCard label="Target release" value={formatDate(releaseSnapshot.targetDate)} detail={releaseTimingDetail(releaseSnapshot)} tone={releaseSnapshot.scheduleDataAvailable ? 'blue' : 'neutral'} />
+          <MetricCard label="AI confidence" value={analysisAvailable ? `${confidenceScore}%` : '—'} detail={confidenceLabel} tone={confidenceTone} />
+        </div>
+
+        <div style={summaryCalloutStyle}>
+          <div style={calloutLabelStyle}>Executive readout</div>
+          <div style={summaryStyle}>{dashboard?.aiSummary || aiStatus.message || 'AI analysis is not available yet.'}</div>
+        </div>
+
+        <div style={{ ...twoColumnStyle, marginTop: 18 }}>
+          <div style={confidenceCardStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'center' }}>
+              <div>
+                <div style={subsectionTitleStyle}>Release readiness</div>
+                <div style={rowMetaStyle}>{readiness.failCount || 0} failed gates · {readiness.warningCount || 0} warnings</div>
+              </div>
+              <StatusPill tone={readinessTone(readiness.recommendation)}>{readinessLabel(readiness.recommendation)}</StatusPill>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              {warningGates.length ? warningGates.map((gate) => (
+                <div key={gate.id} style={compactControlRowStyle}>
+                  <div>
+                    <div style={rowTitleStyle}>{gate.name}</div>
+                    <div style={rowMetaStyle}>{gate.detail}</div>
+                  </div>
+                  <StatusPill tone={gateTone(gate.status)}>{gate.status}</StatusPill>
+                </div>
+              )) : <EmptyState>All release readiness gates currently pass.</EmptyState>}
+            </div>
+          </div>
+          <div style={confidenceCardStyle}>
+            <div style={subsectionTitleStyle}>Confidence rationale</div>
+            <div style={summaryStyle}>{aiAnalysis?.confidence?.rationale || aiStatus.message || 'Waiting for AI analysis.'}</div>
+            <div style={{ marginTop: 16 }}><ProgressBar value={confidenceScore} tone={confidenceTone} /></div>
+          </div>
+        </div>
+      </Section>
+
+      <Section id="risks-actions" title="AI risks and actions" description="Evidence-backed concerns, decisions, dependencies, and next actions.">
+        <div style={metricGridStyle}>
+          <MetricCard label="High risk" value={analysisAvailable ? metrics.highRisk : '—'} tone={analysisAvailable && metrics.highRisk ? 'red' : 'neutral'} />
+          <MetricCard label="Medium risk" value={analysisAvailable ? metrics.mediumRisk : '—'} tone={analysisAvailable && metrics.mediumRisk ? 'amber' : 'neutral'} />
+          <MetricCard label="Decisions needed" value={analysisAvailable ? metrics.decisionsNeeded : '—'} tone={analysisAvailable && metrics.decisionsNeeded ? 'amber' : 'neutral'} />
+        </div>
+
+        <div style={{ ...twoColumnStyle, marginTop: 20 }}>
+          <div>
+            <div style={subsectionTitleStyle}>Evidence-backed risks</div>
+            {aiRisks.length ? aiRisks.map((risk) => <AiRiskCard key={risk.id} risk={risk} />) : (
+              <EmptyState>{analysisAvailable ? 'No evidence-supported risks were identified.' : aiStatus.message || 'AI risk analysis is unavailable.'}</EmptyState>
+            )}
+          </div>
+          <div>
+            <div style={subsectionTitleStyle}>Recommended actions</div>
+            {actions.length ? actions.map((action, index) => (
+              <div key={`${action.issueKey || action.summary}-${index}`} style={listRowStyle}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={rowTitleStyle}>{action.summary}</div>
+                  <div style={rowMetaStyle}>{action.owner} · {action.status}</div>
+                </div>
+                {(action.sourceUrl || action.issueKey) ? (
+                  <a href={action.sourceUrl || jiraUrl(action.issueKey)} target="_blank" rel="noreferrer" style={sourceLinkStyle}>{action.issueKey || 'Evidence'}</a>
+                ) : null}
+              </div>
+            )) : <EmptyState>No decision or action items were detected.</EmptyState>}
+          </div>
+        </div>
+
+        <details style={detailsStyle} open={Boolean(raidRegister.length || additionalDependencies.length)}>
+          <summary style={detailsSummaryStyle}>Risks and dependencies ({raidRegister.length + additionalDependencies.length})</summary>
+          <div style={{ ...twoColumnStyle, marginTop: 14 }}>
+            {raidRegister.map((entry) => (
+              <div key={entry.id} style={controlCardStyle}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                  <div>
+                    <div style={rowTitleStyle}>{entry.title}</div>
+                    <div style={rowMetaStyle}>{entry.owner} · {entry.status}{entry.dueDate ? ` · Due ${formatDate(entry.dueDate)}` : ''}</div>
+                  </div>
+                  <StatusPill tone={toneForRisk(entry.severity)}>{entry.type}</StatusPill>
+                </div>
+                {entry.action ? <div style={riskImpactStyle}><strong>Next action:</strong> {entry.action}</div> : null}
+                {entry.sourceUrl ? <a href={entry.sourceUrl} target="_blank" rel="noreferrer" style={{ ...sourceLinkStyle, display: 'inline-block', marginTop: 10 }}>Open evidence</a> : null}
+              </div>
+            ))}
+            {additionalDependencies.map((dependency) => (
+              <div key={dependency.id} style={controlCardStyle}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                  <div>
+                    <div style={rowTitleStyle}>{dependency.sourceKey} {dependency.relationship} {dependency.targetKey}</div>
+                    <div style={rowMetaStyle}>{dependency.owner} · Target {dependency.targetStatus}{dependency.externalToRelease ? ' · Outside release scope' : ''}</div>
+                  </div>
+                  <StatusPill tone={dependency.criticality === 'critical' ? 'red' : dependency.criticality === 'watch' ? 'amber' : 'green'}>{dependency.criticality}</StatusPill>
+                </div>
+                <div style={evidenceListStyle}>
+                  <a href={dependency.sourceUrl || jiraUrl(dependency.sourceKey)} target="_blank" rel="noreferrer" style={evidenceLinkStyle}>{dependency.sourceKey}</a>
+                  <a href={dependency.targetUrl || jiraUrl(dependency.targetKey)} target="_blank" rel="noreferrer" style={evidenceLinkStyle}>{dependency.targetKey}</a>
+                </div>
+              </div>
+            ))}
+            {!raidRegister.length && !additionalDependencies.length ? <EmptyState>No risks or dependencies were found.</EmptyState> : null}
+          </div>
+        </details>
+      </Section>
+
+      <Section id="supporting-details" title="Supporting details" description="Issue evidence, forecast, trends, and diagnostics when you need to investigate.">
+        <details style={detailsStyle}>
+          <summary style={detailsSummaryStyle}>Jira release issues ({records.length})</summary>
+          <div style={{ marginTop: 12 }}>
+            {records.length ? records.map((record) => (
+              <div key={record.issueKey} style={sourceRowStyle}>
+                <div style={{ minWidth: 0 }}>
+                  <a href={record.sourceLink || jiraUrl(record.issueKey)} target="_blank" rel="noreferrer" style={sourceLinkStyle}>{record.issueKey}</a>
+                  <div style={{ ...rowTitleStyle, marginTop: 4 }}>{record.summary}</div>
+                  <div style={rowMetaStyle}>{record.owner} · {record.priority}{record.dueDate ? ` · Due ${formatDate(record.dueDate)}` : ''}</div>
+                </div>
+                <StatusPill tone={isDone(record.status) ? 'green' : isBlockedStatus(record.status) ? 'red' : isActive(record.status) ? 'blue' : 'neutral'}>{record.status}</StatusPill>
+              </div>
+            )) : <EmptyState>No Jira issues were returned for this release.</EmptyState>}
+          </div>
+        </details>
+
+        <details style={detailsStyle}>
+          <summary style={detailsSummaryStyle}>Forecast and release trend</summary>
+          <div style={{ ...twoColumnStyle, marginTop: 14 }}>
+            <div style={confidenceCardStyle}>
+              <div style={subsectionTitleStyle}>Delivery forecast</div>
+              <div style={compactMetricGridStyle}>
+                <MetricCard label="Expected" value={deliveryForecast.expectedDate ? formatDate(deliveryForecast.expectedDate) : 'Insufficient data'} detail={deliveryForecast.rationale} tone={deliveryForecast.state === 'forecast' ? 'blue' : 'neutral'} />
+                <MetricCard label="On-time probability" value={deliveryForecast.probability == null ? '—' : `${deliveryForecast.probability}%`} detail={deliveryForecast.bestCaseDate ? `${formatDate(deliveryForecast.bestCaseDate)} to ${formatDate(deliveryForecast.worstCaseDate)}` : 'No forecast range available'} tone={deliveryForecast.probability == null ? 'neutral' : deliveryForecast.probability >= 65 ? 'green' : deliveryForecast.probability >= 35 ? 'amber' : 'red'} />
+              </div>
+            </div>
+            <div style={confidenceCardStyle}>
+              <div style={subsectionTitleStyle}>Confidence trend</div>
+              <ConfidenceTrend history={releaseTrend.history} />
+              <div style={rowMetaStyle}>Confidence {formatDelta(releaseTrend.confidenceDelta, ' pts')} · Completed {formatDelta(releaseTrend.completedDelta)} · Blockers {formatDelta(releaseTrend.blockedDelta)}</div>
+            </div>
+          </div>
+        </details>
+
+        <details style={detailsStyle}>
+          <summary style={detailsSummaryStyle}>Diagnostics and source evidence</summary>
+          <div style={{ ...threeColumnStyle, marginTop: 14 }}>
+            <SourceCard name="Jira" state={cardStates.jira} detail={`${summary.total || total} release items`} refreshedAt={sourceLinks.jira?.lastRefresh} />
+            <SourceCard name="Confluence" state={cardStates.confluence} detail={sourceLinks.confluence?.error || `${confluenceItems.length} items from ${sourceLinks.confluence?.spaceKey || config?.confluenceSpaceKey}`} refreshedAt={sourceLinks.confluence?.lastRefresh} link={sourceLinks.confluence?.pageUrl} />
+            <SourceCard name="AI analysis" state={cardStates.openai} detail={`${sourceLinks.openai?.model || 'Model unavailable'} · ${aiStatus.message || 'Status unavailable'}`} refreshedAt={sourceLinks.openai?.lastRefresh} />
+          </div>
+
+          <details style={detailsStyle}>
+            <summary style={detailsSummaryStyle}>Confluence source lineage ({confluenceItems.length})</summary>
+            <div style={{ marginTop: 12 }}>
+              {confluenceItems.length ? confluenceItems.map((item) => (
+                <div key={`source-${item.type}-${item.id}`} style={{ ...sourceRowStyle, paddingLeft: 14 + Math.min(Number(item.depth || 0), 6) * 16 }}>
+                  <div>
+                    <div style={rowTitleStyle}>{item.title || 'Untitled'}</div>
+                    <div style={rowMetaStyle}>{formatConfluenceType(item)} · ID {item.id}</div>
+                  </div>
+                  {item.sourceUrl ? <a href={item.sourceUrl} target="_blank" rel="noreferrer" style={sourceLinkStyle}>Open source</a> : null}
+                </div>
+              )) : <EmptyState>No Confluence source lineage is available.</EmptyState>}
+            </div>
+          </details>
+          <details style={detailsStyle}>
+            <summary style={detailsSummaryStyle}>Jira query</summary>
+            <pre style={{ ...preStyle, marginTop: 12 }}>{sourceLinks.jira?.jql || 'JQL unavailable'}</pre>
+          </details>
+          <details style={detailsStyle}>
+            <summary style={detailsSummaryStyle}>AI data gaps ({aiAnalysis?.dataGaps?.length || 0})</summary>
+            <div style={{ marginTop: 12 }}>
+              {aiAnalysis?.dataGaps?.length ? aiAnalysis.dataGaps.map((gap, index) => (
+                <div key={`${gap}-${index}`} style={listRowStyle}>{gap}</div>
+              )) : <EmptyState>No AI data gaps were reported.</EmptyState>}
+            </div>
+          </details>
+          <details style={detailsStyle}>
+            <summary style={detailsSummaryStyle}>All readiness gates ({readiness.gates?.length || 0})</summary>
+            <div style={{ marginTop: 12 }}>
+              {(readiness.gates || []).map((gate) => (
+                <div key={gate.id} style={compactControlRowStyle}>
+                  <div>
+                    <div style={rowTitleStyle}>{gate.name}</div>
+                    <div style={rowMetaStyle}>{gate.detail}</div>
+                  </div>
+                  <StatusPill tone={gateTone(gate.status)}>{gate.status}</StatusPill>
+                </div>
+              ))}
+            </div>
+          </details>
+        </details>
+      </Section>
+    </>
   );
 }
 

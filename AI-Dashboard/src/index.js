@@ -6,6 +6,7 @@ const api = forgeApiModule.default || forgeApiModule.api || forgeApiModule;
 const storage = forgeApiModule.storage || api.storage;
 const route = forgeApiModule.route || api.route || forgeApiModule.default?.route;
 const crypto = require('crypto');
+const { isBlockedStatus, isDoneStatus } = require('./statusRules');
 
 const resolver = new Resolver();
 
@@ -380,16 +381,6 @@ function buildAiActions(analysis) {
       status: risk.decisionNeeded ? 'Decision needed' : 'Recommended action',
       sourceUrl: normalizeText(risk.evidence?.[0]?.url || '')
     }));
-}
-
-function isDoneStatus(status) {
-  const normalizedStatus = normalizeText(status);
-  return ['ready for release', 'abandoned'].includes(normalizedStatus.toLowerCase())
-    || /done|complete|closed|resolved|released/i.test(normalizedStatus);
-}
-
-function isBlockedStatus(status) {
-  return /blocked|blocker|impediment/i.test(normalizeText(status));
 }
 
 function isHighPriority(priority) {
@@ -1508,6 +1499,46 @@ function buildSourceLinks({ jql, confluenceSnapshot, confluenceSpaceKey, refresh
   };
 }
 
+async function loadDashboardSources({
+  releaseId,
+  team,
+  confluenceSpaceKey,
+  view,
+  settings,
+  refreshedAt,
+  includeSpaceOptions = false
+}) {
+  const jql = buildJql({ releaseId, team, view }, settings);
+  const requests = [
+    fetchJiraIssues(jql),
+    fetchConfluenceSnapshot(confluenceSpaceKey)
+  ];
+  if (includeSpaceOptions) requests.push(fetchConfluenceSpaces());
+
+  const [issues, confluenceSnapshot, confluenceSpaceOptions = []] = await Promise.all(requests);
+  const records = issues.map(normalizeJiraIssue);
+  const releaseSchedule = buildReleaseSchedule(issues, releaseId, refreshedAt);
+  const sourceLinks = buildSourceLinks({
+    jql,
+    confluenceSnapshot,
+    confluenceSpaceKey,
+    refreshedAt
+  });
+
+  return {
+    jql,
+    issues,
+    records,
+    releaseSchedule,
+    confluenceSnapshot,
+    confluenceSpaceOptions,
+    meetingTranscripts: confluenceSnapshot.pages.filter(isMeetingTranscript),
+    workstreams: buildWorkstreams(records),
+    sourceLinks,
+    fingerprint: aiEvidenceFingerprint(records, confluenceSnapshot.pages, releaseSchedule)
+  };
+}
+
 function buildEmptyDashboardResponse({ payload = {}, refreshedAt = new Date().toISOString(), settings = {} } = {}) {
   const releaseId = normalizeText(payload.releaseId || settings.defaultReleaseId || DEFAULT_RELEASE_ID);
   const team = normalizeText(payload.team || settings.defaultTeam || DEFAULT_TEAM);
@@ -1689,12 +1720,24 @@ resolver.define('getDashboardData', async ({ payload }) => {
 
   try {
     console.info(`Dashboard readout started for release "${releaseId}" and space "${confluenceSpaceKey}".`);
-    const jql = buildJql({ releaseId, team, view }, settings);
-    const [issues, confluenceSnapshot, confluenceSpaceOptions] = await Promise.all([
-      fetchJiraIssues(jql),
-      fetchConfluenceSnapshot(confluenceSpaceKey),
-      fetchConfluenceSpaces()
-    ]);
+    const {
+      jql,
+      issues,
+      records: baseRecords,
+      releaseSchedule,
+      confluenceSnapshot,
+      confluenceSpaceOptions,
+      sourceLinks,
+      fingerprint
+    } = await loadDashboardSources({
+      releaseId,
+      team,
+      confluenceSpaceKey,
+      view,
+      settings,
+      refreshedAt,
+      includeSpaceOptions: true
+    });
     const sourceDurationMs = Date.now() - invocationStartedAt;
     console.info(`Dashboard sources loaded in ${sourceDurationMs} ms (${issues.length} Jira issues, ${confluenceSnapshot.items.length} Confluence items).`);
     const [releaseOptions, teamOptions] = await Promise.all([
@@ -1702,17 +1745,6 @@ resolver.define('getDashboardData', async ({ payload }) => {
       Promise.resolve(buildTeamOptions(issues))
     ]);
 
-    const baseRecords = issues.map(normalizeJiraIssue);
-    const releaseSchedule = buildReleaseSchedule(issues, releaseId, refreshedAt);
-    const meetingTranscripts = confluenceSnapshot.pages.filter(isMeetingTranscript);
-    const deliveryWorkstreams = buildWorkstreams(baseRecords);
-    const sourceLinks = buildSourceLinks({
-      jql,
-      confluenceSnapshot,
-      confluenceSpaceKey,
-      refreshedAt
-    });
-    const fingerprint = aiEvidenceFingerprint(baseRecords, confluenceSnapshot.pages, releaseSchedule);
     const cachedAi = await readAiCache(releaseId, team, confluenceSpaceKey);
     const aiResult = cachedAi?.fingerprint === fingerprint
       ? {
@@ -1840,22 +1872,24 @@ resolver.define('getDashboardAiAnalysis', async ({ payload }) => {
   const refreshedAt = new Date().toISOString();
 
   try {
-    const jql = buildJql({ releaseId, team, view }, settings);
-    const [issues, confluenceSnapshot] = await Promise.all([
-      fetchJiraIssues(jql),
-      fetchConfluenceSnapshot(confluenceSpaceKey)
-    ]);
-    const baseRecords = issues.map(normalizeJiraIssue);
-    const releaseSchedule = buildReleaseSchedule(issues, releaseId, refreshedAt);
-    const meetingTranscripts = confluenceSnapshot.pages.filter(isMeetingTranscript);
-    const deliveryWorkstreams = buildWorkstreams(baseRecords);
-    const sourceLinks = buildSourceLinks({
+    const {
       jql,
+      issues,
+      records: baseRecords,
+      releaseSchedule,
       confluenceSnapshot,
+      meetingTranscripts,
+      workstreams: deliveryWorkstreams,
+      sourceLinks,
+      fingerprint
+    } = await loadDashboardSources({
+      releaseId,
+      team,
       confluenceSpaceKey,
+      view,
+      settings,
       refreshedAt
     });
-    const fingerprint = aiEvidenceFingerprint(baseRecords, confluenceSnapshot.pages, releaseSchedule);
     const cachedAi = await readAiCache(releaseId, team, confluenceSpaceKey);
 
     let aiResult;

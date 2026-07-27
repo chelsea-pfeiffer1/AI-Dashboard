@@ -48,46 +48,48 @@ The saved executive artifact contains the displayed status, aggregate metrics, c
 
 Use the navigation buttons below the header to jump between sections.
 
-### Overview
+### Release overview
 
 Provides the fastest summary of the selected release:
 
 - **Release scope** counts Jira stories and bugs assigned to the selected fix version.
 - **Completed** shows issues in a done or completed status—including `Ready for Release` and `Abandoned`—and the corresponding percentage of scope.
 - **In motion** includes work in progress, review, testing, QA, or development.
-- **Confluence sources** counts accessible pages and live documents found in the selected space.
+- **Blocked issues** counts Jira work whose current status indicates it is stopped.
+- **Target release** shows the Jira fix-version date.
+- **AI confidence** shows the evidence-backed delivery assessment.
 - **Executive readout** summarizes the available delivery and meeting evidence. If AI analysis is unavailable, this area displays its current status instead.
+- **Release readiness** shows failed and warning gates by default; passing gates remain available under supporting details.
 - Live source data loads independently from AI generation. The app reuses an analysis when the Jira and Confluence evidence has not changed, otherwise it completes the AI analysis in a separate resolver call and automatically retries with compact evidence when necessary.
 - Saved dashboard versions are enabled only after a current or exactly matched cached AI analysis is available, so newly saved views include AI insight.
 
-### Release Confidence
+### AI risks and actions
 
 Shows an AI-supported assessment of delivery confidence on a 0–100 scale and labels it **On track**, **Watch**, **At risk**, or **Insufficient data**.
 
 The score considers the Jira target date, remaining work, issue status and priority, blockers, aging or overdue items, linked work, and evidence found in Confluence meeting content. Read the rationale with the score; a high completion percentage alone does not guarantee that a release is on track.
 
-The supporting cards show:
+The section shows:
 
-- The target release date from the Jira fix version
-- Completed scope
-- AI-identified high risks and confirmed blockers
+- Evidence-backed high- and medium-severity risks
 - Items for which the evidence indicates an executive decision is needed
+- Recommended actions with owners and evidence links
+- A consolidated risks-and-dependencies list
 
 An em dash means the AI analysis was not available, not that the value is zero.
 
-### Project Health
+### Supporting details
 
-Shows the current delivery flow:
+Supporting details are collapsed until needed. They include:
 
-- **Complete**: issues whose status is treated as done
-- **In motion**: issues in progress, review, testing, QA, or development
-- **Other / not started**: all remaining issues
-- **Blocked**: issues whose current Jira status contains “blocked” or “blocker”
-- **High risk**: Jira issues associated with evidence-backed high-severity risks from the AI analysis
+- The complete Jira issue list and current statuses
+- Delivery forecast and confidence trend
+- Jira, Confluence, and AI source health
+- Confluence lineage, the generated JQL, AI data gaps, and all readiness gates
 
 Counts reflect the Jira data at the updated time shown in the header.
 
-### PMO Controls
+#### PMO calculations
 
 Provides a governance-oriented view for program managers and stakeholders:
 
@@ -99,7 +101,7 @@ Provides a governance-oriented view for program managers and stakeholders:
 
 The app stores at most 20 compact snapshots per release and Confluence-space combination. Snapshots contain issue keys and aggregate delivery metrics only; Confluence bodies, Jira descriptions, and AI narrative content are not stored in release history.
 
-### Risks and Blockers
+#### Risk details
 
 Lists evidence-backed risks and recommended actions. Each risk may include:
 
@@ -110,13 +112,13 @@ Lists evidence-backed risks and recommended actions. Each risk may include:
 
 Use the evidence links to validate the source context. The **Executive decisions** list is generated from risks that require a decision or contain a recommended action; it is not a separate approval system and does not update Jira.
 
-### Meeting Intelligence
+#### Meeting evidence
 
 Highlights accessible Confluence content that appears to be a meeting artifact, including meeting notes, transcripts, stand-ups, syncs, weekly updates, retrospectives, agendas, planning notes, status updates, and live documents.
 
 Select **Open** to review a source in Confluence. **Captured follow-ups** repeats up to six decision-oriented actions identified by the analysis. If the list is empty, either no matching meeting content was found or no supported follow-up was detected.
 
-### Data Quality
+#### Diagnostics
 
 Use this section before sharing or acting on the readout.
 
@@ -130,10 +132,10 @@ Use this section before sharing or acting on the readout.
 ## Recommended review workflow
 
 1. Confirm the scope and updated time in the header.
-2. Scan **Overview** and read the confidence rationale.
+2. Scan **Release overview** and read the confidence rationale.
 3. Review every high-severity risk, blocker, and decision request.
 4. Open the cited Jira and Confluence evidence for any material decision.
-5. Check **Data Quality** for disconnected sources, an unexpected JQL query, or reported data gaps.
+5. Expand **Supporting details → Diagnostics and source evidence** to check disconnected sources, an unexpected JQL query, or reported data gaps.
 6. Select **Refresh data** immediately before using the dashboard in a release review or status meeting.
 
 ## Troubleshooting
