@@ -29,6 +29,26 @@ export async function getDashboardData({ releaseId, team, confluenceSpaceKey, vi
   }
 }
 
+export async function getDashboardAiAnalysis({
+  releaseId,
+  team,
+  confluenceSpaceKey,
+  view,
+  evidenceProfile
+}) {
+  try {
+    return await invoke('getDashboardAiAnalysis', {
+      releaseId,
+      team,
+      confluenceSpaceKey,
+      view,
+      evidenceProfile
+    });
+  } catch (error) {
+    throw normalizeInvokeError(error, 'Failed to complete the dashboard AI analysis');
+  }
+}
+
 export async function listSavedDashboardSnapshots() {
   try {
     return await invoke('listSavedDashboardSnapshots');

@@ -55,7 +55,7 @@ function formatConfluenceType(item) {
 
 function isDone(status) {
   const normalizedStatus = String(status || '').trim();
-  return normalizedStatus.toLowerCase() === 'ready for release'
+  return ['ready for release', 'abandoned'].includes(normalizedStatus.toLowerCase())
     || /done|closed|resolved|complete|released/i.test(normalizedStatus);
 }
 
@@ -665,7 +665,13 @@ export default function App() {
   const meetingItems = confluenceItems.filter((item) =>
     item?.subtype === 'live' || /meeting|standup|sync|weekly|retro|minutes|agenda|planning|status update/i.test(item?.title || '')
   );
-  const canSaveSnapshot = Boolean(!activeSnapshot && summary.refreshedAt && dashboard?.scope?.releaseId);
+  const canSaveSnapshot = Boolean(
+    !activeSnapshot
+    && summary.refreshedAt
+    && dashboard?.scope?.releaseId
+    && analysisAvailable
+    && aiStatus.state === 'loaded'
+  );
   const suggestedSnapshotTitle = canSaveSnapshot
     ? `${dashboard.scope.releaseId} · ${new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date())}`
     : '';

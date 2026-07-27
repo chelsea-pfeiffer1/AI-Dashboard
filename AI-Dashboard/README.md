@@ -53,10 +53,12 @@ Use the navigation buttons below the header to jump between sections.
 Provides the fastest summary of the selected release:
 
 - **Release scope** counts Jira stories and bugs assigned to the selected fix version.
-- **Completed** shows issues in a done or completed status and the corresponding percentage of scope.
+- **Completed** shows issues in a done or completed status—including `Ready for Release` and `Abandoned`—and the corresponding percentage of scope.
 - **In motion** includes work in progress, review, testing, QA, or development.
 - **Confluence sources** counts accessible pages and live documents found in the selected space.
 - **Executive readout** summarizes the available delivery and meeting evidence. If AI analysis is unavailable, this area displays its current status instead.
+- Live source data loads independently from AI generation. The app reuses an analysis when the Jira and Confluence evidence has not changed, otherwise it completes the AI analysis in a separate resolver call and automatically retries with compact evidence when necessary.
+- Saved dashboard versions are enabled only after a current or exactly matched cached AI analysis is available, so newly saved views include AI insight.
 
 ### Release Confidence
 

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { dashboardTemplate } from '../templates/dashboardTemplate';
 import {
   deleteSavedDashboardSnapshot,
+  getDashboardAiAnalysis,
   getDashboardData,
   getSavedDashboardSnapshot,
   listSavedDashboardSnapshots,
@@ -116,6 +117,23 @@ function mergeDashboard(response) {
   };
 }
 
+function mergeDashboardPatch(current, patch) {
+  return mergeDashboard({
+    dashboard: {
+      ...current,
+      ...patch,
+      sourceLinks: {
+        ...(current?.sourceLinks || {}),
+        ...(patch?.sourceLinks || {})
+      },
+      cardStates: {
+        ...(current?.cardStates || {}),
+        ...(patch?.cardStates || {})
+      }
+    }
+  });
+}
+
 export default function useDashboardData() {
   // Start on the scope picker. Data is loaded only after both required source
   // fields have been explicitly supplied through "Generate readout".
@@ -132,6 +150,7 @@ export default function useDashboardData() {
   const [snapshotSaving, setSnapshotSaving] = useState(false);
   const [snapshotError, setSnapshotError] = useState('');
   const [activeSnapshot, setActiveSnapshot] = useState(null);
+  const refreshSequence = useRef(0);
 
   useEffect(() => {
     try {
@@ -160,6 +179,7 @@ export default function useDashboardData() {
 
   const refresh = useCallback(
     async (overrideConfig = {}, { showLoading = false } = {}) => {
+      const requestId = ++refreshSequence.current;
       const effectiveConfig = {
         ...config,
         ...overrideConfig,
@@ -176,18 +196,74 @@ export default function useDashboardData() {
 
       try {
         const response = await getDashboardData(effectiveConfig);
+        if (requestId !== refreshSequence.current) return;
         setConfig(effectiveConfig);
-        setDashboard(mergeDashboard(response));
+        const initialDashboard = mergeDashboard(response);
+        setDashboard(initialDashboard);
         setActiveSnapshot(null);
         setReleaseOptions(Array.isArray(response?.releaseOptions) ? response.releaseOptions : releaseOptions);
         setTeamOptions(Array.isArray(response?.teamOptions) ? response.teamOptions : teamOptions);
         setConfluenceSpaceOptions(
           Array.isArray(response?.confluenceSpaceOptions) ? response.confluenceSpaceOptions : confluenceSpaceOptions
         );
+
+        if (initialDashboard.aiStatus?.state !== 'loaded') {
+          if (showLoading) {
+            setLoading(false);
+          }
+          setDashboard((current) => mergeDashboardPatch(current, {
+            aiStatus: {
+              state: initialDashboard.aiAnalysis ? 'stale' : 'pending',
+              code: 'processing',
+              message: initialDashboard.aiAnalysis
+                ? 'Showing the previous AI insight while current evidence is analyzed.'
+                : 'AI insight is being generated for this dashboard.'
+            },
+            cardStates: { openai: 'loading' }
+          }));
+
+          try {
+            for (const evidenceProfile of ['full', 'compact', 'minimal']) {
+              const aiResponse = await getDashboardAiAnalysis({
+                ...effectiveConfig,
+                evidenceProfile
+              });
+              if (requestId !== refreshSequence.current) return;
+              if (aiResponse?.dashboardPatch) {
+                setDashboard((current) => mergeDashboardPatch(current, aiResponse.dashboardPatch));
+              }
+              if (aiResponse?.completed || !aiResponse?.retryable) {
+                break;
+              }
+              setDashboard((current) => mergeDashboardPatch(current, {
+                aiStatus: {
+                  state: current.aiAnalysis ? 'stale' : 'pending',
+                  code: 'retrying',
+                  message: 'The AI analysis is retrying with a smaller evidence set.'
+                },
+                cardStates: { openai: 'loading' }
+              }));
+            }
+          } catch (aiError) {
+            if (requestId !== refreshSequence.current) return;
+            setDashboard((current) => mergeDashboardPatch(current, {
+              aiStatus: {
+                state: current.aiAnalysis ? 'stale' : 'error',
+                code: 'request_failed',
+                message: current.aiAnalysis
+                  ? 'The current AI refresh failed; the most recent completed insight remains visible.'
+                  : getErrorMessage(aiError)
+              },
+              cardStates: { openai: current.aiAnalysis ? 'loaded' : 'error' }
+            }));
+          }
+        }
       } catch (caughtError) {
-        setError(getErrorMessage(caughtError));
+        if (requestId === refreshSequence.current) {
+          setError(getErrorMessage(caughtError));
+        }
       } finally {
-        if (showLoading) {
+        if (showLoading && requestId === refreshSequence.current) {
           setLoading(false);
         }
       }
@@ -218,6 +294,7 @@ export default function useDashboardData() {
       return;
     }
     setSnapshotLoading(true);
+    refreshSequence.current += 1;
     setSnapshotError('');
     setError('');
     try {
