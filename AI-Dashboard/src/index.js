@@ -14,7 +14,19 @@ const DEFAULT_TEAM = process.env.DEFAULT_TEAM || 'VMS';
 const DEFAULT_CONFLUENCE_SPACE_KEY = process.env.CONFLUENCE_SPACE_KEY || 'PS';
 const CONFLUENCE_SITE_URL = 'https://365retailmarkets.atlassian.net';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.4-mini';
-const OPENAI_TIMEOUT_MS = Number(process.env.OPENAI_TIMEOUT_MS || 15000);
+// UI resolver invocations have a hard 25-second Forge limit. Keep the AI call
+// comfortably below that ceiling even if an older environment variable still
+// requests a longer timeout.
+const configuredOpenAiTimeoutMs = Number(process.env.OPENAI_TIMEOUT_MS || 8000);
+const OPENAI_TIMEOUT_MS = Math.min(
+  10000,
+  Math.max(1000, Number.isFinite(configuredOpenAiTimeoutMs) ? configuredOpenAiTimeoutMs : 8000)
+);
+const PRODUCT_REQUEST_BUDGET_MS = 4000;
+const DASHBOARD_INVOCATION_BUDGET_MS = 22000;
+const DASHBOARD_COMPLETION_RESERVE_MS = 2500;
+const MAX_CONFLUENCE_PAGES = 50;
+const MAX_CONFLUENCE_SPACE_OPTIONS = 100;
 const SETTINGS_KEY = 'dashboard-settings';
 const MAX_RELEASE_HISTORY_SNAPSHOTS = 20;
 const SAVED_DASHBOARD_INDEX_KEY = 'saved-dashboard-snapshot-index-v1';
@@ -187,19 +199,47 @@ async function readSettings() {
 async function requestJson(path, requestOptions = {}, product = 'jira') {
   const appClient = product === 'confluence' ? api.asApp().requestConfluence : api.asApp().requestJira;
   const userClient = product === 'confluence' ? api.asUser().requestConfluence : api.asUser().requestJira;
+  const requestStartedAt = Date.now();
 
   async function parseResponse(client) {
-    const response = await client(path, requestOptions);
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`${product} request failed: ${response.status} ${response.statusText} ${body}`);
+    const remainingBudgetMs = PRODUCT_REQUEST_BUDGET_MS - (Date.now() - requestStartedAt);
+    if (remainingBudgetMs <= 0) {
+      throw new Error(`${product} request exceeded its ${PRODUCT_REQUEST_BUDGET_MS / 1000}-second budget.`);
     }
-    return response.json();
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), remainingBudgetMs);
+    try {
+      const response = await client(path, {
+        ...requestOptions,
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        const body = await response.text();
+        const error = new Error(`${product} request failed: ${response.status} ${response.statusText} ${body}`);
+        error.status = response.status;
+        throw error;
+      }
+      return response.json();
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        throw new Error(`${product} request exceeded its ${PRODUCT_REQUEST_BUDGET_MS / 1000}-second budget.`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   try {
     return await parseResponse(userClient);
   } catch (userError) {
+    // A timeout already consumed this operation's entire budget. Retrying the
+    // same route as the app would only make a 25-second resolver timeout more
+    // likely. Authorization failures still receive the existing asApp fallback.
+    if (/exceeded its .* budget/i.test(normalizeText(userError?.message || ''))) {
+      throw normalizeError(userError);
+    }
     try {
       return await parseResponse(appClient);
     } catch (appError) {
@@ -210,7 +250,10 @@ async function requestJson(path, requestOptions = {}, product = 'jira') {
 
 async function fetchJiraIssues(jql) {
   const issues = [];
-  const maxResults = 50;
+  // The enhanced JQL endpoint supports a larger page size. Fetching 100 at a
+  // time preserves the existing 200-issue ceiling while halving the number of
+  // sequential Jira round trips required for a large release.
+  const maxResults = 100;
   let nextPageToken;
 
   do {
@@ -913,7 +956,7 @@ function compactIssueRecord(record) {
     labels: record?.labels || [],
     components: record?.components || [],
     fixVersions: record?.fixVersions || [],
-    description: String(record?.description || '').slice(0, 2000),
+    description: String(record?.description || '').slice(0, 1000),
     dueDate: record?.dueDate || '',
     createdAt: record?.createdAt || '',
     updatedAt: record?.updatedAt || '',
@@ -1058,7 +1101,8 @@ async function analyzeWithOpenAI({
   records,
   confluencePages,
   meetingTranscripts,
-  sourceLinks
+  sourceLinks,
+  timeoutMs = OPENAI_TIMEOUT_MS
 }) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -1070,8 +1114,17 @@ async function analyzeWithOpenAI({
     };
   }
 
+  const effectiveTimeoutMs = Math.max(1000, Math.min(OPENAI_TIMEOUT_MS, Number(timeoutMs) || OPENAI_TIMEOUT_MS));
+  // Meeting artifacts contain the delivery evidence this analysis is designed
+  // to use. Avoid sending every Confluence page plus the same meeting pages a
+  // second time; that duplication increased latency and OpenAI input usage.
+  const evidencePages = (
+    Array.isArray(meetingTranscripts) && meetingTranscripts.length
+      ? meetingTranscripts.slice(0, 20)
+      : (Array.isArray(confluencePages) ? confluencePages.slice(0, 10) : [])
+  );
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), effectiveTimeoutMs);
 
   try {
     const response = await fetch('https://api.openai.com/v1/responses', {
@@ -1085,7 +1138,7 @@ async function analyzeWithOpenAI({
         model: OPENAI_MODEL,
         store: false,
         reasoning: { effort: 'low' },
-        max_output_tokens: 5000,
+        max_output_tokens: 3500,
         text: {
           format: {
             type: 'json_schema',
@@ -1108,8 +1161,7 @@ async function analyzeWithOpenAI({
                 releaseSchedule,
                 workstreams,
                 records: Array.isArray(records) ? records.map(compactIssueRecord) : [],
-                confluencePages: Array.isArray(confluencePages) ? confluencePages.map(compactConfluencePage) : [],
-                meetingTranscripts: Array.isArray(meetingTranscripts) ? meetingTranscripts.map(compactConfluencePage) : [],
+                confluencePages: evidencePages.map(compactConfluencePage),
                 sourceLinks
               },
               null,
@@ -1159,7 +1211,7 @@ async function analyzeWithOpenAI({
       state: 'error',
       code: timedOut ? 'timed_out' : 'request_failed',
       message: timedOut
-        ? `OpenAI analysis exceeded the ${OPENAI_TIMEOUT_MS / 1000}-second request limit.`
+        ? `OpenAI analysis exceeded the ${effectiveTimeoutMs / 1000}-second request limit.`
         : 'The OpenAI analysis request failed.',
       analysis: null
     };
@@ -1171,7 +1223,7 @@ async function analyzeWithOpenAI({
 async function fetchConfluenceSpaces() {
   try {
     const spaces = [];
-    const limit = 100;
+    const limit = MAX_CONFLUENCE_SPACE_OPTIONS;
     let cursor = '';
 
     // Confluence REST v2 uses cursor pagination. The retired v1 space endpoint used
@@ -1186,9 +1238,10 @@ async function fetchConfluenceSpaces() {
       );
       spaces.push(...(Array.isArray(payload.results) ? payload.results : []));
       cursor = getConfluenceNextCursor(payload);
-    } while (cursor);
+    } while (cursor && spaces.length < MAX_CONFLUENCE_SPACE_OPTIONS);
 
     const options = spaces
+      .slice(0, MAX_CONFLUENCE_SPACE_OPTIONS)
       .map((space) => ({
         id: normalizeText(space?.key || ''),
         name: `${normalizeText(space?.name || space?.key || 'Space')} (${normalizeText(space?.key || '')})`
@@ -1285,10 +1338,11 @@ async function fetchConfluenceSnapshot(confluenceSpaceKey = DEFAULT_CONFLUENCE_S
       const batch = Array.isArray(payload.results) ? payload.results : [];
       pages.push(...batch);
       cursor = batch.length ? getConfluenceNextCursor(payload) : '';
-    } while (cursor);
+    } while (cursor && pages.length < MAX_CONFLUENCE_PAGES);
 
-    const pagesById = new Map(pages.map((page) => [normalizeText(page?.id || ''), page]));
-    const items = pages.map((page) => ({
+    const boundedPages = pages.slice(0, MAX_CONFLUENCE_PAGES);
+    const pagesById = new Map(boundedPages.map((page) => [normalizeText(page?.id || ''), page]));
+    const items = boundedPages.map((page) => ({
       ...page,
       type: 'page',
       spaceKey,
@@ -1311,7 +1365,8 @@ async function fetchConfluenceSnapshot(confluenceSpaceKey = DEFAULT_CONFLUENCE_S
         pageTitle: normalizeText(space.name || spaceKey),
         pageUrl: spaceUrl,
         endpoint: `/wiki/api/v2/spaces/${space.id}/pages`,
-        itemCount: items.length
+        itemCount: items.length,
+        truncated: Boolean(cursor || pages.length > MAX_CONFLUENCE_PAGES)
       }
     };
   } catch (error) {
@@ -1348,7 +1403,7 @@ function buildSourceLinks({ jql, confluenceSnapshot, confluenceSpaceKey, refresh
       itemCount: confluenceSnapshot?.items?.length || 0,
       error: confluenceSnapshot?.source?.error || '',
       transformationSummary: confluenceSnapshot?.items?.length
-        ? `Fetched the pages and live docs available in Confluence space ${confluenceSpaceKey || DEFAULT_CONFLUENCE_SPACE_KEY}.`
+        ? `Fetched ${confluenceSnapshot.items.length} pages and live docs from Confluence space ${confluenceSpaceKey || DEFAULT_CONFLUENCE_SPACE_KEY}${confluenceSnapshot?.source?.truncated ? ` (capped at ${MAX_CONFLUENCE_PAGES} items for resolver performance)` : ''}.`
         : `No accessible pages were returned from Confluence space ${confluenceSpaceKey || DEFAULT_CONFLUENCE_SPACE_KEY}.`,
       lastRefresh: refreshedAt
     },
@@ -1528,6 +1583,7 @@ resolver.define('deleteSavedDashboardSnapshot', async ({ payload, context }) => 
 });
 
 resolver.define('getDashboardData', async ({ payload }) => {
+  const invocationStartedAt = Date.now();
   const settings = await readSettings();
   const releaseId = normalizeText(payload?.releaseId || settings.defaultReleaseId || DEFAULT_RELEASE_ID);
   const team = normalizeText(payload?.team || settings.defaultTeam || DEFAULT_TEAM);
@@ -1538,12 +1594,15 @@ resolver.define('getDashboardData', async ({ payload }) => {
   const refreshedAt = new Date().toISOString();
 
   try {
+    console.info(`Dashboard readout started for release "${releaseId}" and space "${confluenceSpaceKey}".`);
     const jql = buildJql({ releaseId, team, view }, settings);
     const [issues, confluenceSnapshot, confluenceSpaceOptions] = await Promise.all([
       fetchJiraIssues(jql),
       fetchConfluenceSnapshot(confluenceSpaceKey),
       fetchConfluenceSpaces()
     ]);
+    const sourceDurationMs = Date.now() - invocationStartedAt;
+    console.info(`Dashboard sources loaded in ${sourceDurationMs} ms (${issues.length} Jira issues, ${confluenceSnapshot.items.length} Confluence items).`);
     const [releaseOptions, teamOptions] = await Promise.all([
       Promise.resolve(buildReleaseOptions(issues)),
       Promise.resolve(buildTeamOptions(issues))
@@ -1559,24 +1618,35 @@ resolver.define('getDashboardData', async ({ payload }) => {
       confluenceSpaceKey,
       refreshedAt
     });
-    const aiResult = await analyzeWithOpenAI({
-      summary: {
-        total: issues.length,
-        visible: issues.length,
-        jql,
-        refreshedAt,
-        sourceSystem: 'Jira',
-        releaseId,
-        team,
-        confluenceSpaceKey
-      },
-      releaseSchedule,
-      workstreams: deliveryWorkstreams.map(({ name, total }) => ({ name, total })),
-      records: baseRecords,
-      confluencePages: confluenceSnapshot.pages,
-      meetingTranscripts,
-      sourceLinks
-    });
+    const remainingAiBudgetMs = DASHBOARD_INVOCATION_BUDGET_MS
+      - (Date.now() - invocationStartedAt)
+      - DASHBOARD_COMPLETION_RESERVE_MS;
+    const aiResult = remainingAiBudgetMs < 1000
+      ? {
+        state: 'error',
+        code: 'source_budget_exhausted',
+        message: 'Jira and Confluence loaded, but AI analysis was skipped to keep the dashboard within the Forge request limit.',
+        analysis: null
+      }
+      : await analyzeWithOpenAI({
+        summary: {
+          total: issues.length,
+          visible: issues.length,
+          jql,
+          refreshedAt,
+          sourceSystem: 'Jira',
+          releaseId,
+          team,
+          confluenceSpaceKey
+        },
+        releaseSchedule,
+        workstreams: deliveryWorkstreams.map(({ name, total }) => ({ name, total })),
+        records: baseRecords,
+        confluencePages: confluenceSnapshot.pages,
+        meetingTranscripts,
+        sourceLinks,
+        timeoutMs: remainingAiBudgetMs
+      });
     const aiAnalysis = aiResult.analysis;
     const normalizedRecords = applyAiRisksToRecords(baseRecords, aiAnalysis);
     const metrics = buildAiMetrics(aiAnalysis);
@@ -1600,7 +1670,7 @@ resolver.define('getDashboardData', async ({ payload }) => {
       releaseRisks: { risks: aiAnalysis?.risks || [], source: 'OpenAI analysis of Jira and Confluence' }
     };
 
-    return {
+    const response = {
       releaseOptions,
       teamOptions,
       confluenceSpaceOptions,
@@ -1656,6 +1726,8 @@ resolver.define('getDashboardData', async ({ payload }) => {
         }
       }
     };
+    console.info(`Dashboard readout completed in ${Date.now() - invocationStartedAt} ms (AI status: ${aiResult.code}).`);
+    return response;
   } catch (error) {
     console.error('getDashboardData failed:', error);
     throw normalizeError(error);
