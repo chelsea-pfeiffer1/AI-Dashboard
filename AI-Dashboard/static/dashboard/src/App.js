@@ -54,7 +54,9 @@ function formatConfluenceType(item) {
 }
 
 function isDone(status) {
-  return /done|closed|resolved|complete/i.test(String(status || ''));
+  const normalizedStatus = String(status || '').trim();
+  return normalizedStatus.toLowerCase() === 'ready for release'
+    || /done|closed|resolved|complete|released/i.test(normalizedStatus);
 }
 
 function isActive(status) {
