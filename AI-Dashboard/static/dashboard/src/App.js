@@ -18,6 +18,18 @@ const COLORS = {
   redSoft: '#ffeceb'
 };
 
+const DASHBOARD_VIEW_STORAGE_KEY = 'forge-ai-dashboard-role-view-v1';
+const DASHBOARD_VIEWS = {
+  executive: {
+    label: 'Executive View',
+    description: 'Readiness, confidence, risks, decisions, and forecast'
+  },
+  team: {
+    label: 'Team / PMO View',
+    description: 'Delivery controls, exceptions, flow, ownership, and issue detail'
+  }
+};
+
 function formatTimestamp(value) {
   if (!value) return 'Not available';
   try {
@@ -93,6 +105,30 @@ function toneForRisk(risk) {
 
 function jiraUrl(issueKey) {
   return issueKey ? `https://365retailmarkets.atlassian.net/browse/${encodeURIComponent(issueKey)}` : '';
+}
+
+function readStoredDashboardView() {
+  if (typeof window === 'undefined') return 'executive';
+  try {
+    const storedView = window.localStorage.getItem(DASHBOARD_VIEW_STORAGE_KEY);
+    return DASHBOARD_VIEWS[storedView] ? storedView : 'executive';
+  } catch {
+    return 'executive';
+  }
+}
+
+function isPastDue(record) {
+  if (!record?.dueDate || isDone(record.status)) return false;
+  const dueDate = new Date(`${record.dueDate}T23:59:59`);
+  return !Number.isNaN(dueDate.getTime()) && dueDate.getTime() < Date.now();
+}
+
+function isBug(record) {
+  return /bug/i.test(String(record?.issueType || ''));
+}
+
+function isHighPriority(record) {
+  return /highest|critical|blocker|high/i.test(String(record?.priority || ''));
 }
 
 function escapeHtml(value) {
@@ -383,6 +419,195 @@ function EmptyState({ children }) {
   return <div style={emptyStateStyle}>{children}</div>;
 }
 
+function OperationalIssueList({ title, records, emptyText, limit = 8 }) {
+  const visibleRecords = records.slice(0, limit);
+  return (
+    <div style={operationalCardStyle}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <div style={subsectionTitleStyle}>{title}</div>
+        <StatusPill tone={records.length ? 'amber' : 'green'}>{records.length}</StatusPill>
+      </div>
+      <div style={{ marginTop: 10 }}>
+        {visibleRecords.length ? visibleRecords.map((record) => (
+          <a
+            key={`${title}-${record.issueKey}`}
+            href={record.sourceLink || jiraUrl(record.issueKey)}
+            target="_blank"
+            rel="noreferrer"
+            title={`Open ${record.issueKey} in Jira`}
+            style={{ ...operationalIssueRowStyle, ...jiraItemRowLinkStyle }}
+          >
+            <div style={{ minWidth: 0 }}>
+              <span style={sourceLinkStyle}>{record.issueKey}</span>
+              <div style={operationalIssueSummaryStyle}>{record.summary}</div>
+              <div style={rowMetaStyle}>
+                {record.owner} · {record.status}{record.dueDate ? ` · Due ${formatDate(record.dueDate)}` : ''}
+              </div>
+            </div>
+            <StatusPill tone={isBlockedStatus(record.status) ? 'red' : isPastDue(record) ? 'amber' : 'neutral'}>
+              {record.priority}
+            </StatusPill>
+          </a>
+        )) : <EmptyState>{emptyText}</EmptyState>}
+      </div>
+      {records.length > limit ? (
+        <div style={{ ...rowMetaStyle, marginTop: 10 }}>{records.length - limit} additional issues appear in the complete Jira issue list below.</div>
+      ) : null}
+    </div>
+  );
+}
+
+function TeamPmoDashboardContent({ dashboard }) {
+  const viewModel = buildDashboardViewModel(dashboard);
+  const {
+    records, total, completed, active, blocked, completionPercent, releaseSnapshot
+  } = viewModel;
+  const dependencySignals = Array.isArray(dashboard?.dependencySignals) ? dashboard.dependencySignals : [];
+  const incompleteRecords = records.filter((record) => !isDone(record.status));
+  const blockedRecords = incompleteRecords.filter((record) => isBlockedStatus(record.status));
+  const overdueRecords = incompleteRecords.filter(isPastDue);
+  const missingDueDateRecords = incompleteRecords.filter((record) => !record.dueDate);
+  const openBugRecords = incompleteRecords.filter(isBug);
+  const highPriorityRecords = incompleteRecords.filter(isHighPriority);
+
+  const statusGroups = Array.from(records.reduce((groups, record) => {
+    const status = String(record.status || 'Unknown');
+    groups.set(status, (groups.get(status) || 0) + 1);
+    return groups;
+  }, new Map()).entries())
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+
+  const ownerGroups = Array.from(records.reduce((groups, record) => {
+    const owner = String(record.owner || 'Unassigned');
+    const current = groups.get(owner) || { name: owner, total: 0, incomplete: 0, blocked: 0, overdue: 0 };
+    current.total += 1;
+    if (!isDone(record.status)) current.incomplete += 1;
+    if (isBlockedStatus(record.status)) current.blocked += 1;
+    if (isPastDue(record)) current.overdue += 1;
+    groups.set(owner, current);
+    return groups;
+  }, new Map()).values())
+    .sort((a, b) => b.incomplete - a.incomplete || b.total - a.total || a.name.localeCompare(b.name))
+    .slice(0, 15);
+
+  const workstreams = Array.isArray(dashboard?.workstreams) ? dashboard.workstreams : [];
+
+  return (
+    <>
+      <Section id="team-overview" title="Operational overview" description="The current Jira delivery picture for the team and PMO.">
+        <div style={metricGridStyle}>
+          <MetricCard label="Release scope" value={total} detail="Stories and bugs" tone="blue" />
+          <MetricCard label="Completed" value={`${completionPercent}%`} detail={`${completed} of ${total}`} tone="green" />
+          <MetricCard label="In motion" value={active} detail="In progress or review" tone="blue" />
+          <MetricCard label="Blocked" value={blocked} detail="Work currently stopped" tone={blocked ? 'red' : 'neutral'} />
+          <MetricCard label="Past due" value={overdueRecords.length} detail="Incomplete issues past due" tone={overdueRecords.length ? 'red' : 'green'} />
+          <MetricCard label="Open bugs" value={openBugRecords.length} detail="Incomplete bugs in release scope" tone={openBugRecords.length ? 'amber' : 'green'} />
+          <MetricCard label="Missing due date" value={missingDueDateRecords.length} detail="Incomplete work without a due date" tone={missingDueDateRecords.length ? 'amber' : 'green'} />
+          <MetricCard label="Dependencies" value={dependencySignals.length} detail="Linked delivery relationships" tone={dependencySignals.length ? 'blue' : 'neutral'} />
+        </div>
+        <div style={{ ...summaryCalloutStyle, marginTop: 18 }}>
+          <div style={calloutLabelStyle}>Release timing</div>
+          <div style={summaryStyle}>
+            Target {formatDate(releaseSnapshot.targetDate)} · {releaseTimingDetail(releaseSnapshot)}
+          </div>
+        </div>
+      </Section>
+
+      <Section id="delivery-controls" title="Delivery controls" description="Exception queues that need team or PMO attention.">
+        <div style={twoColumnStyle}>
+          <OperationalIssueList title="Blocked work" records={blockedRecords} emptyText="No incomplete issues are currently blocked." />
+          <OperationalIssueList title="Past-due work" records={overdueRecords} emptyText="No incomplete issues are currently past due." />
+          <OperationalIssueList title="Missing due dates" records={missingDueDateRecords} emptyText="Every incomplete issue has a due date." />
+          <OperationalIssueList title="Open bugs" records={openBugRecords} emptyText="No open bugs are present in the selected release scope." />
+          <OperationalIssueList title="High-priority open work" records={highPriorityRecords} emptyText="No high-priority incomplete issues were returned." />
+        </div>
+      </Section>
+
+      <Section id="flow-ownership" title="Flow and ownership" description="Where the release work sits and who currently owns it.">
+        <div style={threeColumnStyle}>
+          <div style={operationalCardStyle}>
+            <div style={subsectionTitleStyle}>Status distribution</div>
+            <div style={{ marginTop: 10 }}>
+              {statusGroups.length ? statusGroups.map((group) => (
+                <div key={group.name} style={compactControlRowStyle}>
+                  <div>
+                    <div style={rowTitleStyle}>{group.name}</div>
+                    <div style={rowMetaStyle}>{total ? Math.round((group.count / total) * 100) : 0}% of scope</div>
+                  </div>
+                  <StatusPill tone={isDone(group.name) ? 'green' : isBlockedStatus(group.name) ? 'red' : isActive(group.name) ? 'blue' : 'neutral'}>
+                    {group.count}
+                  </StatusPill>
+                </div>
+              )) : <EmptyState>Generate a readout to see status distribution.</EmptyState>}
+            </div>
+          </div>
+
+          <div style={operationalCardStyle}>
+            <div style={subsectionTitleStyle}>Workstreams</div>
+            <div style={{ marginTop: 10 }}>
+              {workstreams.length ? workstreams.map((workstream) => (
+                <div key={workstream.name} style={compactControlRowStyle}>
+                  <div>
+                    <div style={rowTitleStyle}>{workstream.name}</div>
+                    <div style={rowMetaStyle}>{workstream.blocked || 0} blocked · {workstream.highRisk || 0} high risk</div>
+                  </div>
+                  <StatusPill tone={workstream.blocked ? 'red' : workstream.highRisk ? 'amber' : 'blue'}>
+                    {workstream.total}
+                  </StatusPill>
+                </div>
+              )) : <EmptyState>No workstream data is available.</EmptyState>}
+            </div>
+          </div>
+
+          <div style={operationalCardStyle}>
+            <div style={subsectionTitleStyle}>Owner workload</div>
+            <div style={{ marginTop: 10 }}>
+              {ownerGroups.length ? ownerGroups.map((owner) => (
+                <div key={owner.name} style={compactControlRowStyle}>
+                  <div>
+                    <div style={rowTitleStyle}>{owner.name}</div>
+                    <div style={rowMetaStyle}>{owner.incomplete} open · {owner.blocked} blocked · {owner.overdue} overdue</div>
+                  </div>
+                  <StatusPill tone={owner.blocked ? 'red' : owner.overdue ? 'amber' : 'neutral'}>
+                    {owner.total}
+                  </StatusPill>
+                </div>
+              )) : <EmptyState>No ownership data is available.</EmptyState>}
+            </div>
+          </div>
+        </div>
+      </Section>
+
+      <Section id="team-issues" title="Jira release issues" description="Complete operational issue list with direct links to Jira.">
+        <div>
+          {records.length ? records.map((record) => (
+            <a
+              key={`team-${record.issueKey}`}
+              href={record.sourceLink || jiraUrl(record.issueKey)}
+              target="_blank"
+              rel="noreferrer"
+              title={`Open ${record.issueKey} in Jira`}
+              style={{ ...sourceRowStyle, ...jiraItemRowLinkStyle }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <span style={sourceLinkStyle}>{record.issueKey}</span>
+                <div style={{ ...rowTitleStyle, marginTop: 4 }}>{record.summary}</div>
+                <div style={rowMetaStyle}>
+                  {record.owner} · {record.priority}{record.dueDate ? ` · Due ${formatDate(record.dueDate)}` : ' · Due date missing'}
+                </div>
+              </div>
+              <StatusPill tone={isDone(record.status) ? 'green' : isBlockedStatus(record.status) ? 'red' : isActive(record.status) ? 'blue' : 'neutral'}>
+                {record.status}
+              </StatusPill>
+            </a>
+          )) : <EmptyState>No Jira issues were returned for this release.</EmptyState>}
+        </div>
+      </Section>
+    </>
+  );
+}
+
 function ConfidenceTrend({ history }) {
   const points = (Array.isArray(history) ? history : [])
     .filter((snapshot) => snapshot.confidenceScore != null)
@@ -656,6 +881,7 @@ export default function App() {
     deleteSnapshot,
     closeSnapshot
   } = useDashboardData();
+  const [activeView, setActiveView] = React.useState(readStoredDashboardView);
   const hasSelectedScope = Boolean(config?.releaseId && config?.confluenceSpaceKey);
   const summary = dashboard?.summary || {};
   const metrics = dashboard?.metrics || {};
@@ -672,6 +898,29 @@ export default function App() {
   const suggestedSnapshotTitle = canSaveSnapshot
     ? `${dashboard.scope.releaseId} · ${new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date())}`
     : '';
+  const sectionLinks = activeView === 'team'
+    ? [
+      ['team-overview', 'Operational overview'],
+      ['delivery-controls', 'Delivery controls'],
+      ['flow-ownership', 'Flow & ownership'],
+      ['team-issues', 'Jira issues']
+    ]
+    : [
+      ['overview', 'Release overview'],
+      ['risks-actions', 'AI risks & actions'],
+      ['supporting-details', 'Supporting details']
+    ];
+
+  const selectView = (nextView) => {
+    if (!DASHBOARD_VIEWS[nextView]) return;
+    setActiveView(nextView);
+    try {
+      window.localStorage.setItem(DASHBOARD_VIEW_STORAGE_KEY, nextView);
+    } catch {
+      // Ignore storage failures in restricted Forge browser contexts.
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   if (loading) {
     return (
@@ -718,12 +967,31 @@ export default function App() {
             )}
           </header>
 
+          <nav style={viewNavigationStyle} aria-label="Dashboard role views">
+            {Object.entries(DASHBOARD_VIEWS).map(([viewId, view]) => {
+              const selected = activeView === viewId;
+              return (
+                <button
+                  key={viewId}
+                  type="button"
+                  onClick={() => selectView(viewId)}
+                  style={{
+                    ...viewNavigationButtonStyle,
+                    ...(selected ? viewNavigationButtonActiveStyle : {})
+                  }}
+                  aria-pressed={selected}
+                >
+                  <span style={viewNavigationLabelStyle}>{view.label}</span>
+                  <span style={{ ...viewNavigationDescriptionStyle, color: selected ? '#deebff' : COLORS.muted }}>
+                    {view.description}
+                  </span>
+                </button>
+              );
+            })}
+          </nav>
+
           <nav style={navStyle} aria-label="Dashboard sections">
-            {[
-              ['overview', 'Release overview'],
-              ['risks-actions', 'AI risks & actions'],
-              ['supporting-details', 'Supporting details']
-            ].map(([id, label]) => (
+            {sectionLinks.map(([id, label]) => (
               <button
                 key={id}
                 type="button"
@@ -735,20 +1003,22 @@ export default function App() {
             ))}
           </nav>
 
-          <SnapshotLibrary
-            snapshots={savedSnapshots}
-            activeSnapshot={activeSnapshot}
-            loading={snapshotLoading}
-            saving={snapshotSaving}
-            error={snapshotError}
-            canSave={canSaveSnapshot}
-            suggestedTitle={suggestedSnapshotTitle}
-            onOpen={openSnapshot}
-            onSave={saveSnapshot}
-            onDelete={deleteSnapshot}
-            onDownload={() => downloadSnapshot(activeSnapshot, dashboard)}
-            onClose={closeSnapshot}
-          />
+          {(activeView === 'executive' || activeSnapshot) ? (
+            <SnapshotLibrary
+              snapshots={savedSnapshots}
+              activeSnapshot={activeSnapshot}
+              loading={snapshotLoading}
+              saving={snapshotSaving}
+              error={snapshotError}
+              canSave={canSaveSnapshot}
+              suggestedTitle={suggestedSnapshotTitle}
+              onOpen={openSnapshot}
+              onSave={saveSnapshot}
+              onDelete={deleteSnapshot}
+              onDownload={() => downloadSnapshot(activeSnapshot, dashboard)}
+              onClose={closeSnapshot}
+            />
+          ) : null}
 
           {!activeSnapshot ? (
             <ScopeControls
@@ -763,7 +1033,9 @@ export default function App() {
             <div style={errorStyle}><strong>Live data unavailable</strong><div style={{ marginTop: 5 }}>{error}</div></div>
           ) : null}
 
-          <DashboardContent dashboard={dashboard} config={config} />
+          {activeView === 'team'
+            ? <TeamPmoDashboardContent dashboard={dashboard} />
+            : <DashboardContent dashboard={dashboard} config={config} />}
         </div>
       </div>
     </AppErrorBoundary>
@@ -905,20 +1177,21 @@ function DashboardContent({ dashboard, config }) {
           <summary style={detailsSummaryStyle}>Jira release issues ({records.length})</summary>
           <div style={{ marginTop: 12 }}>
             {records.length ? records.map((record) => (
-              <div key={record.issueKey} style={sourceRowStyle}>
+              <a
+                key={record.issueKey}
+                href={record.sourceLink || jiraUrl(record.issueKey)}
+                target="_blank"
+                rel="noreferrer"
+                title={`Open ${record.issueKey} in Jira`}
+                style={{ ...sourceRowStyle, ...jiraItemRowLinkStyle }}
+              >
                 <div style={{ minWidth: 0 }}>
-                  <JiraIssueLink issueKey={record.issueKey} href={record.sourceLink} />
-                  <JiraIssueLink
-                    issueKey={record.issueKey}
-                    href={record.sourceLink}
-                    style={{ ...rowTitleStyle, display: 'block', marginTop: 4, color: COLORS.ink, textDecoration: 'none', whiteSpace: 'normal' }}
-                  >
-                    {record.summary}
-                  </JiraIssueLink>
+                  <span style={sourceLinkStyle}>{record.issueKey}</span>
+                  <div style={{ ...rowTitleStyle, marginTop: 4 }}>{record.summary}</div>
                   <div style={rowMetaStyle}>{record.owner} · {record.priority}{record.dueDate ? ` · Due ${formatDate(record.dueDate)}` : ''}</div>
                 </div>
                 <StatusPill tone={isDone(record.status) ? 'green' : isBlockedStatus(record.status) ? 'red' : isActive(record.status) ? 'blue' : 'neutral'}>{record.status}</StatusPill>
-              </div>
+              </a>
             )) : <EmptyState>No Jira issues were returned for this release.</EmptyState>}
           </div>
         </details>
@@ -1018,6 +1291,11 @@ const headerStyle = { ...panelStyle, display: 'flex', justifyContent: 'space-bet
 const pageTitleStyle = { margin: '6px 0 8px', fontSize: 34, lineHeight: 1.1, color: COLORS.ink };
 const headerMetaStyle = { display: 'flex', gap: 8, flexWrap: 'wrap', color: '#44546f', lineHeight: 1.5 };
 const eyebrowStyle = { color: COLORS.blue, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' };
+const viewNavigationStyle = { ...panelStyle, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 10, padding: 10, marginBottom: 10 };
+const viewNavigationButtonStyle = { display: 'grid', gap: 5, textAlign: 'left', padding: '14px 16px', border: `1px solid ${COLORS.border}`, borderRadius: 10, background: '#fff', color: COLORS.ink, cursor: 'pointer', fontFamily: 'inherit' };
+const viewNavigationButtonActiveStyle = { borderColor: COLORS.blue, background: COLORS.blue, color: '#fff', boxShadow: '0 2px 5px rgba(12,102,228,0.22)' };
+const viewNavigationLabelStyle = { fontSize: 15, fontWeight: 800 };
+const viewNavigationDescriptionStyle = { fontSize: 11, fontWeight: 500, lineHeight: 1.4 };
 const navStyle = { ...panelStyle, display: 'flex', gap: 8, flexWrap: 'wrap', padding: 10, marginBottom: 18, position: 'sticky', top: 8, zIndex: 2 };
 const navLinkStyle = { color: '#44546f', background: '#fff', border: `1px solid transparent`, fontFamily: 'inherit', fontSize: 13, fontWeight: 700, padding: '8px 11px', borderRadius: 8, cursor: 'pointer' };
 const sectionStyle = { ...panelStyle, marginBottom: 18, scrollMarginTop: 86 };
@@ -1036,6 +1314,10 @@ const summaryStyle = { whiteSpace: 'pre-wrap', lineHeight: 1.65, color: COLORS.i
 const twoColumnStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 18 };
 const threeColumnStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 };
 const confidenceCardStyle = { padding: 20, background: '#f7f8f9', border: `1px solid ${COLORS.border}`, borderRadius: 12 };
+const operationalCardStyle = { padding: 18, background: '#fff', border: `1px solid ${COLORS.border}`, borderRadius: 12 };
+const operationalIssueRowStyle = { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '11px 0', borderBottom: `1px solid ${COLORS.border}` };
+const operationalIssueSummaryStyle = { color: COLORS.ink, fontSize: 13, fontWeight: 700, lineHeight: 1.35, marginTop: 3 };
+const jiraItemRowLinkStyle = { color: 'inherit', textDecoration: 'none', cursor: 'pointer' };
 const confidenceScoreStyle = { fontSize: 46, fontWeight: 800, lineHeight: 1, margin: '10px 0 18px' };
 const trendChartStyle = { width: '100%', height: 150, display: 'block', background: '#fff', border: `1px solid ${COLORS.border}`, borderRadius: 8, marginTop: 10 };
 const progressTrackStyle = { height: 9, background: '#dfe1e6', borderRadius: 999, overflow: 'hidden' };

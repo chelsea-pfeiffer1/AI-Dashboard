@@ -47,11 +47,29 @@ The saved executive artifact contains the displayed status, aggregate metrics, c
 
 ## Read the dashboard
 
-Use the navigation buttons below the header to jump between sections.
+Use the page-level navigation below the header to choose the view that matches the current task:
+
+- **Executive View** provides readiness, confidence, risks, decisions, dependencies, forecasts, and saved executive versions.
+- **Team / PMO View** provides operational delivery controls, exception queues, status and workstream flow, owner workload, and the complete Jira issue list.
+
+Both views use the same selected release and Confluence scope. Switching views does not reload the source data or require the user to re-enter the release. The app remembers the last view selected in that browser. The smaller navigation bar beneath the view selector jumps between sections within the active page.
+
+### Team / PMO operational view
+
+The Team / PMO page includes:
+
+- Release scope, completion, in-motion work, blockers, past-due work, open bugs, missing due dates, and dependency counts
+- Clickable exception queues for blocked, overdue, missing-date, bug, and high-priority work
+- Status distribution across the selected release
+- Workstream totals with blocked and high-risk counts
+- Owner workload with open, blocked, and overdue counts
+- A complete Jira issue list with clickable issue keys and summaries
+
+The role views are presentation choices rather than permission boundaries. Any user who can open the app can switch between them, subject to their normal Jira and Confluence access.
 
 ### Release overview
 
-Provides the fastest summary of the selected release:
+The Executive page provides the fastest summary of the selected release:
 
 - **Release scope** counts Jira stories and bugs assigned to the selected fix version.
 - **Completed** shows issues in a done or completed status—including `Ready for Release` and `Abandoned`—and the corresponding percentage of scope.
@@ -133,9 +151,9 @@ Use this section before sharing or acting on the readout.
 ## Recommended review workflow
 
 1. Confirm the scope and updated time in the header.
-2. Scan **Release overview** and read the confidence rationale.
-3. Review every high-severity risk, blocker, and decision request.
-4. Open the cited Jira and Confluence evidence for any material decision.
+2. Use **Executive View** for steering discussions, confidence, readiness, decisions, and saved status versions.
+3. Use **Team / PMO View** for blocked work, overdue issues, missing dates, bugs, ownership, and issue-level follow-up.
+4. Review every high-severity risk, blocker, and decision request.
 5. Expand **Supporting details → Diagnostics and source evidence** to check disconnected sources, an unexpected JQL query, or reported data gaps.
 6. Select **Refresh data** immediately before using the dashboard in a release review or status meeting.
 
