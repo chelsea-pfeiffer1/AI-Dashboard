@@ -173,7 +173,7 @@ function buildSnapshotHtml(snapshot, dashboard) {
     <h1>${escapeHtml(snapshot?.title || 'Release snapshot')}</h1>
     ${snapshot?.note ? `<p>${escapeHtml(snapshot.note)}</p>` : ''}
     <p class="muted">Saved ${escapeHtml(formatTimestamp(snapshot?.savedAt))} · Source data from ${escapeHtml(formatTimestamp(snapshot?.sourceRefreshedAt || dashboard?.summary?.refreshedAt))}</p>
-    <p><strong>Release:</strong> ${escapeHtml(dashboard?.scope?.releaseId || 'Unknown')} · <strong>Team:</strong> ${escapeHtml(dashboard?.scope?.team || 'Unknown')} · <strong>Confluence:</strong> ${escapeHtml(dashboard?.scope?.confluenceSpaceKey || 'Unknown')}</p>
+    <p><strong>Release:</strong> ${escapeHtml(dashboard?.scope?.releaseId || 'Unknown')} · <strong>Team:</strong> ${escapeHtml(dashboard?.scope?.team || 'Unknown')} · <strong>Confluence:</strong> ${escapeHtml(dashboard?.scope?.confluenceRootTitle || dashboard?.scope?.confluenceSpaceKey || 'Unknown')}</p>
   </header>
 
   <section>
@@ -324,7 +324,25 @@ function ProgressBar({ value, tone = 'blue' }) {
   );
 }
 
+function JiraIssueLink({ issueKey, href, style = sourceLinkStyle, children }) {
+  if (!issueKey) return null;
+  return (
+    <a
+      href={href || jiraUrl(issueKey)}
+      target="_blank"
+      rel="noreferrer"
+      style={style}
+      title={`Open ${issueKey} in Jira`}
+    >
+      {children || issueKey}
+    </a>
+  );
+}
+
 function AiRiskCard({ risk }) {
+  const affectedIssueKeys = Array.isArray(risk.affectedIssueKeys)
+    ? [...new Set(risk.affectedIssueKeys.filter(Boolean))]
+    : [];
   return (
     <div style={riskCardStyle}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'flex-start' }}>
@@ -337,10 +355,17 @@ function AiRiskCard({ risk }) {
       <div style={riskDescriptionStyle}>{risk.description}</div>
       <div style={riskImpactStyle}><strong>Potential impact:</strong> {risk.impact}</div>
       <div style={riskImpactStyle}><strong>Recommended action:</strong> {risk.recommendedAction}</div>
+      {affectedIssueKeys.length ? (
+        <div style={evidenceListStyle}>
+          {affectedIssueKeys.map((issueKey) => (
+            <JiraIssueLink key={issueKey} issueKey={issueKey} style={evidenceLinkStyle} />
+          ))}
+        </div>
+      ) : null}
       <div style={evidenceListStyle}>
         {(risk.evidence || []).map((evidence, index) => (
-          evidence.url ? (
-            <a key={`${evidence.sourceSystem}-${evidence.sourceId}-${index}`} href={evidence.url} target="_blank" rel="noreferrer" style={evidenceLinkStyle}>
+          (evidence.url || (String(evidence.sourceSystem).toLowerCase() === 'jira' && evidence.sourceId)) ? (
+            <a key={`${evidence.sourceSystem}-${evidence.sourceId}-${index}`} href={evidence.url || jiraUrl(evidence.sourceId)} target="_blank" rel="noreferrer" style={evidenceLinkStyle}>
               {evidence.sourceSystem}: {evidence.title || evidence.sourceId}
             </a>
           ) : (
@@ -388,20 +413,24 @@ function ConfidenceTrend({ history }) {
 function ScopeControls({ config, releaseOptions, confluenceSpaceOptions, onApply }) {
   const [releaseId, setReleaseId] = React.useState(config?.releaseId || '');
   const [spaceKey, setSpaceKey] = React.useState(config?.confluenceSpaceKey || '');
+  const [contentUrl, setContentUrl] = React.useState(config?.confluenceContentUrl || '');
 
   React.useEffect(() => {
     setReleaseId(config?.releaseId || '');
     setSpaceKey(config?.confluenceSpaceKey || '');
-  }, [config?.releaseId, config?.confluenceSpaceKey]);
+    setContentUrl(config?.confluenceContentUrl || '');
+  }, [config?.releaseId, config?.confluenceSpaceKey, config?.confluenceContentUrl]);
 
   const submit = (event) => {
     event.preventDefault();
     const nextRelease = releaseId.trim();
     const nextSpace = spaceKey.trim();
+    const nextContentUrl = contentUrl.trim();
     if (!nextRelease || !nextSpace) return;
     onApply({
       releaseId: nextRelease,
-      confluenceSpaceKey: nextSpace
+      confluenceSpaceKey: nextSpace,
+      confluenceContentUrl: nextContentUrl
     });
   };
 
@@ -441,6 +470,17 @@ function ScopeControls({ config, releaseOptions, confluenceSpaceOptions, onApply
           <datalist id="confluence-space-options">
             {(confluenceSpaceOptions || []).map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
           </datalist>
+        </label>
+        <label style={{ ...fieldLabelStyle, gridColumn: 'span 2' }}>
+          <span>Confluence folder or parent-page URL (optional)</span>
+          <input
+            type="url"
+            value={contentUrl}
+            onChange={(event) => setContentUrl(event.target.value)}
+            placeholder="Paste the folder or parent-page URL from Confluence"
+            style={inputStyle}
+          />
+          <span style={fieldHelpStyle}>When supplied, only that page or folder and its descendant pages are analyzed.</span>
         </label>
         <button type="submit" style={{ ...primaryButtonStyle, alignSelf: 'end' }}>Generate readout</button>
       </div>
@@ -658,7 +698,7 @@ export default function App() {
                 <span>·</span>
                 <span>{dashboard?.scope?.team || config?.team || 'Unknown team'}</span>
                 <span>·</span>
-                <span>Confluence {dashboard?.scope?.confluenceSpaceKey || config?.confluenceSpaceKey || 'Unknown space'}</span>
+                <span>Confluence {dashboard?.scope?.confluenceRootTitle || dashboard?.scope?.confluenceSpaceKey || config?.confluenceSpaceKey || 'Unknown space'}</span>
                 <span>·</span>
                 <span>Updated {formatTimestamp(summary.refreshedAt)}</span>
               </div>
@@ -808,7 +848,9 @@ function DashboardContent({ dashboard, config }) {
                   <div style={rowMetaStyle}>{action.owner} · {action.status}</div>
                 </div>
                 {(action.sourceUrl || action.issueKey) ? (
-                  <a href={action.sourceUrl || jiraUrl(action.issueKey)} target="_blank" rel="noreferrer" style={sourceLinkStyle}>{action.issueKey || 'Evidence'}</a>
+                  action.issueKey
+                    ? <JiraIssueLink issueKey={action.issueKey} href={action.sourceUrl} />
+                    : <a href={action.sourceUrl} target="_blank" rel="noreferrer" style={sourceLinkStyle}>Evidence</a>
                 ) : null}
               </div>
             )) : <EmptyState>No decision or action items were detected.</EmptyState>}
@@ -828,6 +870,13 @@ function DashboardContent({ dashboard, config }) {
                   <StatusPill tone={toneForRisk(entry.severity)}>{entry.type}</StatusPill>
                 </div>
                 {entry.action ? <div style={riskImpactStyle}><strong>Next action:</strong> {entry.action}</div> : null}
+                {entry.issueKeys?.length ? (
+                  <div style={evidenceListStyle}>
+                    {entry.issueKeys.map((issueKey) => (
+                      <JiraIssueLink key={`${entry.id}-${issueKey}`} issueKey={issueKey} style={evidenceLinkStyle} />
+                    ))}
+                  </div>
+                ) : null}
                 {entry.sourceUrl ? <a href={entry.sourceUrl} target="_blank" rel="noreferrer" style={{ ...sourceLinkStyle, display: 'inline-block', marginTop: 10 }}>Open evidence</a> : null}
               </div>
             ))}
@@ -841,8 +890,8 @@ function DashboardContent({ dashboard, config }) {
                   <StatusPill tone={dependency.criticality === 'critical' ? 'red' : dependency.criticality === 'watch' ? 'amber' : 'green'}>{dependency.criticality}</StatusPill>
                 </div>
                 <div style={evidenceListStyle}>
-                  <a href={dependency.sourceUrl || jiraUrl(dependency.sourceKey)} target="_blank" rel="noreferrer" style={evidenceLinkStyle}>{dependency.sourceKey}</a>
-                  <a href={dependency.targetUrl || jiraUrl(dependency.targetKey)} target="_blank" rel="noreferrer" style={evidenceLinkStyle}>{dependency.targetKey}</a>
+                  <JiraIssueLink issueKey={dependency.sourceKey} href={dependency.sourceUrl} style={evidenceLinkStyle} />
+                  <JiraIssueLink issueKey={dependency.targetKey} href={dependency.targetUrl} style={evidenceLinkStyle} />
                 </div>
               </div>
             ))}
@@ -858,8 +907,14 @@ function DashboardContent({ dashboard, config }) {
             {records.length ? records.map((record) => (
               <div key={record.issueKey} style={sourceRowStyle}>
                 <div style={{ minWidth: 0 }}>
-                  <a href={record.sourceLink || jiraUrl(record.issueKey)} target="_blank" rel="noreferrer" style={sourceLinkStyle}>{record.issueKey}</a>
-                  <div style={{ ...rowTitleStyle, marginTop: 4 }}>{record.summary}</div>
+                  <JiraIssueLink issueKey={record.issueKey} href={record.sourceLink} />
+                  <JiraIssueLink
+                    issueKey={record.issueKey}
+                    href={record.sourceLink}
+                    style={{ ...rowTitleStyle, display: 'block', marginTop: 4, color: COLORS.ink, textDecoration: 'none', whiteSpace: 'normal' }}
+                  >
+                    {record.summary}
+                  </JiraIssueLink>
                   <div style={rowMetaStyle}>{record.owner} · {record.priority}{record.dueDate ? ` · Due ${formatDate(record.dueDate)}` : ''}</div>
                 </div>
                 <StatusPill tone={isDone(record.status) ? 'green' : isBlockedStatus(record.status) ? 'red' : isActive(record.status) ? 'blue' : 'neutral'}>{record.status}</StatusPill>
@@ -890,7 +945,7 @@ function DashboardContent({ dashboard, config }) {
           <summary style={detailsSummaryStyle}>Diagnostics and source evidence</summary>
           <div style={{ ...threeColumnStyle, marginTop: 14 }}>
             <SourceCard name="Jira" state={cardStates.jira} detail={`${summary.total || total} release items`} refreshedAt={sourceLinks.jira?.lastRefresh} />
-            <SourceCard name="Confluence" state={cardStates.confluence} detail={sourceLinks.confluence?.error || `${confluenceItems.length} items from ${sourceLinks.confluence?.spaceKey || config?.confluenceSpaceKey}`} refreshedAt={sourceLinks.confluence?.lastRefresh} link={sourceLinks.confluence?.pageUrl} />
+            <SourceCard name="Confluence" state={cardStates.confluence} detail={sourceLinks.confluence?.error || `${confluenceItems.length} items from ${sourceLinks.confluence?.pageTitle || sourceLinks.confluence?.spaceKey || config?.confluenceSpaceKey}`} refreshedAt={sourceLinks.confluence?.lastRefresh} link={sourceLinks.confluence?.pageUrl} />
             <SourceCard name="AI analysis" state={cardStates.openai} detail={`${sourceLinks.openai?.model || 'Model unavailable'} · ${aiStatus.message || 'Status unavailable'}`} refreshedAt={sourceLinks.openai?.lastRefresh} />
           </div>
 
@@ -1003,6 +1058,7 @@ const scopeTitleStyle = { color: COLORS.ink, fontSize: 16, fontWeight: 800 };
 const scopeHelpStyle = { color: COLORS.muted, fontSize: 12, lineHeight: 1.45, marginTop: 5 };
 const scopeFieldsStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', alignItems: 'end', gap: 12, flex: '1 1 680px' };
 const fieldLabelStyle = { display: 'grid', gap: 6, color: '#44546f', fontSize: 12, fontWeight: 700 };
+const fieldHelpStyle = { color: '#626f86', fontSize: 11, fontWeight: 400, lineHeight: 1.35 };
 const inputStyle = { width: '100%', minHeight: 40, boxSizing: 'border-box', border: `1px solid ${COLORS.border}`, borderRadius: 8, background: '#fff', color: COLORS.ink, padding: '0 11px', fontSize: 14 };
 const riskCardStyle = { padding: 16, border: `1px solid ${COLORS.border}`, borderRadius: 11, background: '#fafbfc', marginBottom: 10 };
 const riskDescriptionStyle = { marginTop: 12, color: COLORS.ink, lineHeight: 1.55 };

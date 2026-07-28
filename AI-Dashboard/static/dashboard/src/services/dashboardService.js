@@ -16,12 +16,13 @@ function normalizeInvokeError(error, fallbackMessage) {
   return new Error(fallbackMessage);
 }
 
-export async function getDashboardData({ releaseId, team, confluenceSpaceKey, view }) {
+export async function getDashboardData({ releaseId, team, confluenceSpaceKey, confluenceContentUrl, view }) {
   try {
     return await invoke('getDashboardData', {
       releaseId,
       team,
       confluenceSpaceKey,
+      confluenceContentUrl,
       view
     });
   } catch (error) {
@@ -33,6 +34,7 @@ export async function getDashboardAiAnalysis({
   releaseId,
   team,
   confluenceSpaceKey,
+  confluenceContentUrl,
   view,
   evidenceProfile
 }) {
@@ -41,6 +43,7 @@ export async function getDashboardAiAnalysis({
       releaseId,
       team,
       confluenceSpaceKey,
+      confluenceContentUrl,
       view,
       evidenceProfile
     });

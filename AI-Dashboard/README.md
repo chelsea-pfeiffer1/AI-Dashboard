@@ -23,10 +23,11 @@ You must be able to view the selected Jira work and Confluence space. If content
 
 1. In **Jira fix version**, select a suggestion or enter the exact fix-version name used in Jira. Names are case- and character-sensitive enough that copying the Jira value is safest.
 2. In **Confluence space**, select or enter the space key, such as `PS`. Use the short key from the space URL, not the full space name. The field converts the key to uppercase.
-3. Select **Generate readout**.
-4. Review the release name, team, Confluence space, and updated time at the top of the page to confirm the intended scope loaded.
+3. To limit the analysis within a large shared space, paste a Confluence folder or parent-page URL into **Confluence folder or parent-page URL**. The dashboard includes that parent page, when applicable, and the descendant pages beneath the selected location. Leave the field blank to analyze the space-level page collection.
+4. Select **Generate readout**.
+5. Review the release name, team, selected Confluence location, and updated time at the top of the page to confirm the intended scope loaded.
 
-The release and space fields start blank on each visit. Select **Refresh data** to rerun the current readout with the latest source data after generating it once.
+The release, space, and Confluence location fields start blank on each visit. Select **Refresh data** to rerun the current readout with the latest source data after generating it once.
 
 ## Save an executive version
 
@@ -99,7 +100,7 @@ Provides a governance-oriented view for program managers and stakeholders:
 - **Dependency criticality** ranks Jira issue links as normal, watch, or critical. A critical signal means the relationship appears blocking and is also blocked, overdue, or associated with high risk; it is a decision-support signal rather than a complete critical-path calculation.
 - **Delivery forecast** uses Jira resolution dates from the last 42 days to estimate recent weekly throughput and best-case, expected, and worst-case completion dates. The on-time percentage is a transparent heuristic and is omitted when the source history is insufficient.
 
-The app stores at most 20 compact snapshots per release and Confluence-space combination. Snapshots contain issue keys and aggregate delivery metrics only; Confluence bodies, Jira descriptions, and AI narrative content are not stored in release history.
+The app stores at most 20 compact snapshots per release, Confluence space, and selected folder or parent-page combination. Snapshots contain issue keys and aggregate delivery metrics only; Confluence bodies, Jira descriptions, and AI narrative content are not stored in release history.
 
 #### Risk details
 
@@ -151,6 +152,7 @@ Use this section before sharing or acting on the readout.
 ### Confluence shows no data
 
 - Enter the space key rather than the space name.
+- If you supplied a folder or parent-page URL, confirm that it is a full URL from the configured Confluence site and belongs to the selected space.
 - Confirm the space exists and you can view its content.
 - Check the Confluence source card for an access or retrieval message.
 - A successful connection can still return no meeting intelligence if no content resembles meeting notes or transcripts.
@@ -183,7 +185,7 @@ Read the accompanying error, confirm the selected release and space, and try **R
 
 When reporting a problem, include:
 
-- The Jira fix version and Confluence space key
+- The Jira fix version, Confluence space key, and folder or parent-page URL when one was selected
 - The time shown next to **Updated**
 - The source-card states from **Data Quality**
 - Any visible error message

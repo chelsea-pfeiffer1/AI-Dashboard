@@ -30,7 +30,8 @@ function readStoredConfig() {
       // them here prevents either a saved choice or an old default from silently
       // determining which Jira and Confluence data loads on a later visit.
       releaseId: '',
-      confluenceSpaceKey: ''
+      confluenceSpaceKey: '',
+      confluenceContentUrl: ''
     };
   } catch {
     return dashboardTemplate.filters;
@@ -185,7 +186,10 @@ export default function useDashboardData() {
         ...overrideConfig,
         releaseId: String((overrideConfig.releaseId ?? config.releaseId) || '').trim(),
         team: String((overrideConfig.team ?? config.team) || '').trim(),
-        confluenceSpaceKey: String((overrideConfig.confluenceSpaceKey ?? config.confluenceSpaceKey) || '').trim()
+        confluenceSpaceKey: String((overrideConfig.confluenceSpaceKey ?? config.confluenceSpaceKey) || '').trim(),
+        confluenceContentUrl: String(
+          (overrideConfig.confluenceContentUrl ?? config.confluenceContentUrl) || ''
+        ).trim()
       };
 
       if (showLoading) {

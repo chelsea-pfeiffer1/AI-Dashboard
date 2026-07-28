@@ -656,10 +656,17 @@ function buildDeliveryForecast(records, releaseSchedule, refreshedAt) {
   };
 }
 
-function getReleaseHistoryKey(releaseId, confluenceSpaceKey) {
+function getReleaseHistoryKey(releaseId, confluenceSpaceKey, confluenceRootId = '') {
+  const scopeParts = [
+    normalizeText(releaseId),
+    normalizeText(confluenceSpaceKey).toUpperCase()
+  ];
+  if (normalizeText(confluenceRootId)) {
+    scopeParts.push(normalizeText(confluenceRootId));
+  }
   const digest = crypto
     .createHash('sha256')
-    .update(`${normalizeText(releaseId)}|${normalizeText(confluenceSpaceKey).toUpperCase()}`)
+    .update(scopeParts.join('|'))
     .digest('hex')
     .slice(0, 32);
   return `release-history:${digest}`;
@@ -716,13 +723,13 @@ function buildReleaseTrend(previous, current, history) {
   };
 }
 
-async function recordReleaseHistory(releaseId, confluenceSpaceKey, currentSnapshot) {
+async function recordReleaseHistory(releaseId, confluenceSpaceKey, confluenceRootId, currentSnapshot) {
   if (!storage || typeof storage.get !== 'function' || typeof storage.set !== 'function') {
     return buildReleaseTrend(null, currentSnapshot, [currentSnapshot]);
   }
 
   try {
-    const key = getReleaseHistoryKey(releaseId, confluenceSpaceKey);
+    const key = getReleaseHistoryKey(releaseId, confluenceSpaceKey, confluenceRootId);
     const stored = await storage.get(key);
     const history = Array.isArray(stored) ? stored.filter((snapshot) => snapshot?.capturedAt) : [];
     const previous = history[history.length - 1] || null;
@@ -816,7 +823,11 @@ function compactSavedDashboard(dashboard = {}) {
     scope: {
       releaseId: normalizeText(dashboard?.scope?.releaseId || '').slice(0, 200),
       team: normalizeText(dashboard?.scope?.team || '').slice(0, 200),
-      confluenceSpaceKey: normalizeText(dashboard?.scope?.confluenceSpaceKey || '').slice(0, 100)
+      confluenceSpaceKey: normalizeText(dashboard?.scope?.confluenceSpaceKey || '').slice(0, 100),
+      confluenceContentUrl: normalizeText(dashboard?.scope?.confluenceContentUrl || '').slice(0, 1000),
+      confluenceRootId: normalizeText(dashboard?.scope?.confluenceRootId || '').slice(0, 150),
+      confluenceRootType: normalizeText(dashboard?.scope?.confluenceRootType || '').slice(0, 30),
+      confluenceRootTitle: normalizeText(dashboard?.scope?.confluenceRootTitle || '').slice(0, 500)
     },
     summary: {
       total: Number(dashboard?.summary?.total || 0),
@@ -859,6 +870,9 @@ function compactSavedDashboard(dashboard = {}) {
       confluence: dashboard?.sourceLinks?.confluence ? {
         system: 'Confluence',
         spaceKey: normalizeText(dashboard.sourceLinks.confluence.spaceKey || ''),
+        rootId: normalizeText(dashboard.sourceLinks.confluence.rootId || '').slice(0, 150),
+        rootType: normalizeText(dashboard.sourceLinks.confluence.rootType || '').slice(0, 30),
+        pageTitle: normalizeText(dashboard.sourceLinks.confluence.pageTitle || '').slice(0, 500),
         pageUrl: normalizeText(dashboard.sourceLinks.confluence.pageUrl || '').slice(0, 1000),
         itemCount: Number(dashboard.sourceLinks.confluence.itemCount || 0),
         lastRefresh: normalizeText(dashboard.sourceLinks.confluence.lastRefresh || ''),
@@ -988,19 +1002,23 @@ function aiEvidenceFingerprint(records, confluencePages, releaseSchedule) {
   return crypto.createHash('sha256').update(JSON.stringify(evidenceVersion)).digest('hex');
 }
 
-function aiCacheKey(releaseId, team, confluenceSpaceKey) {
-  const scope = [
+function aiCacheKey(releaseId, team, confluenceSpaceKey, confluenceRootId = '') {
+  const scopeParts = [
     normalizeText(releaseId).toLowerCase(),
     normalizeText(team).toLowerCase(),
     normalizeText(confluenceSpaceKey).toUpperCase()
-  ].join('|');
+  ];
+  if (normalizeText(confluenceRootId)) {
+    scopeParts.push(normalizeText(confluenceRootId));
+  }
+  const scope = scopeParts.join('|');
   return `${AI_CACHE_KEY_PREFIX}${crypto.createHash('sha256').update(scope).digest('hex')}`;
 }
 
-async function readAiCache(releaseId, team, confluenceSpaceKey) {
+async function readAiCache(releaseId, team, confluenceSpaceKey, confluenceRootId = '') {
   if (!storage || typeof storage.get !== 'function') return null;
   try {
-    const cached = await storage.get(aiCacheKey(releaseId, team, confluenceSpaceKey));
+    const cached = await storage.get(aiCacheKey(releaseId, team, confluenceSpaceKey, confluenceRootId));
     return cached?.analysis ? cached : null;
   } catch (error) {
     console.error(`AI cache could not be read: ${error?.message || 'Unknown storage error'}`);
@@ -1008,10 +1026,10 @@ async function readAiCache(releaseId, team, confluenceSpaceKey) {
   }
 }
 
-async function writeAiCache(releaseId, team, confluenceSpaceKey, fingerprint, analysis) {
+async function writeAiCache(releaseId, team, confluenceSpaceKey, confluenceRootId, fingerprint, analysis) {
   if (!analysis || !storage || typeof storage.set !== 'function') return;
   try {
-    await storage.set(aiCacheKey(releaseId, team, confluenceSpaceKey), {
+    await storage.set(aiCacheKey(releaseId, team, confluenceSpaceKey, confluenceRootId), {
       fingerprint,
       analysis,
       completedAt: new Date().toISOString(),
@@ -1386,8 +1404,90 @@ function buildConfluenceWebUrl(content, fallback = '') {
   return `${CONFLUENCE_SITE_URL}/wiki${webUi.startsWith('/') ? '' : '/'}${webUi}`;
 }
 
-async function fetchConfluenceSnapshot(confluenceSpaceKey = DEFAULT_CONFLUENCE_SPACE_KEY) {
+function parseConfluenceRootUrl(confluenceContentUrl, selectedSpaceKey) {
+  const rawUrl = normalizeText(confluenceContentUrl || '');
+  if (!rawUrl) {
+    return null;
+  }
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(rawUrl);
+  } catch (error) {
+    throw new Error('Enter a full Confluence folder or parent-page URL.');
+  }
+
+  const expectedOrigin = new URL(CONFLUENCE_SITE_URL).origin.toLowerCase();
+  if (!['http:', 'https:'].includes(parsedUrl.protocol) || parsedUrl.origin.toLowerCase() !== expectedOrigin) {
+    throw new Error(`The folder or parent-page URL must be from ${CONFLUENCE_SITE_URL}.`);
+  }
+
+  const contentPathMatch = parsedUrl.pathname.match(
+    /\/wiki\/spaces\/([^/]+)\/(folder|pages)\/(\d+)(?:\/|$)/i
+  );
+  const legacyPageId = normalizeText(parsedUrl.searchParams.get('pageId') || '');
+  const isLegacyPageUrl = /\/wiki\/pages\/viewpage\.action$/i.test(parsedUrl.pathname) && /^\d+$/.test(legacyPageId);
+
+  if (!contentPathMatch && !isLegacyPageUrl) {
+    throw new Error('The Confluence URL must identify a folder or page. Copy its URL from Confluence and try again.');
+  }
+
+  const urlSpaceKey = contentPathMatch ? decodeURIComponent(contentPathMatch[1]).toUpperCase() : '';
+  if (urlSpaceKey && urlSpaceKey !== normalizeText(selectedSpaceKey).toUpperCase()) {
+    throw new Error(`The selected URL belongs to space ${urlSpaceKey}, not ${selectedSpaceKey}.`);
+  }
+
+  return {
+    id: contentPathMatch ? contentPathMatch[3] : legacyPageId,
+    type: contentPathMatch?.[2]?.toLowerCase() === 'folder' ? 'folder' : 'page',
+    url: parsedUrl.toString()
+  };
+}
+
+function normalizeConfluencePages(pages, spaceKey) {
+  const pagesById = new Map(pages.map((page) => [normalizeText(page?.id || ''), page]));
+  return pages.map((page) => ({
+    ...page,
+    type: 'page',
+    spaceKey,
+    title: normalizeText(page.title || `Page ${page.id}`),
+    parentId: normalizeText(page?.parentId || ''),
+    depth: Number.isFinite(Number(page?.depth))
+      ? Number(page.depth)
+      : getConfluencePageDepth(page, pagesById),
+    sourceUrl: buildConfluenceWebUrl(
+      page,
+      `${CONFLUENCE_SITE_URL}/wiki/pages/viewpage.action?pageId=${encodeURIComponent(page.id)}`
+    )
+  }));
+}
+
+async function fetchConfluencePagesByIds(pageIds) {
+  const uniqueIds = [...new Set(pageIds.map((id) => normalizeText(id)).filter((id) => /^\d+$/.test(id)))]
+    .slice(0, MAX_CONFLUENCE_PAGES);
+  const batches = [];
+
+  // REST v2 accepts an array of page IDs. Small batches keep the generated URL
+  // comfortably below gateway limits while avoiding one request per page.
+  for (let index = 0; index < uniqueIds.length; index += 25) {
+    const ids = uniqueIds.slice(index, index + 25);
+    batches.push(requestJson(
+      route`/wiki/api/v2/pages?id=${ids}&status=${['current']}&body-format=storage&limit=${ids.length}`,
+      {},
+      'confluence'
+    ));
+  }
+
+  const payloads = await Promise.all(batches);
+  return payloads.flatMap((payload) => Array.isArray(payload?.results) ? payload.results : []);
+}
+
+async function fetchConfluenceSnapshot(
+  confluenceSpaceKey = DEFAULT_CONFLUENCE_SPACE_KEY,
+  confluenceContentUrl = ''
+) {
   const spaceKey = normalizeText(confluenceSpaceKey || DEFAULT_CONFLUENCE_SPACE_KEY).toUpperCase();
+  const requestedRoot = parseConfluenceRootUrl(confluenceContentUrl, spaceKey);
   if (!spaceKey) {
     return { pages: [], items: [], source: null };
   }
@@ -1404,6 +1504,76 @@ async function fetchConfluenceSnapshot(confluenceSpaceKey = DEFAULT_CONFLUENCE_S
       .find((candidate) => normalizeText(candidate?.key || '').toUpperCase() === spaceKey);
     if (!space?.id) {
       throw new Error(`Confluence space ${spaceKey} was not found or is not accessible.`);
+    }
+
+    if (requestedRoot) {
+      const root = await requestJson(
+        requestedRoot.type === 'folder'
+          ? route`/wiki/api/v2/folders/${requestedRoot.id}`
+          : route`/wiki/api/v2/pages/${requestedRoot.id}?body-format=storage`,
+        {},
+        'confluence'
+      );
+      if (normalizeText(root?.spaceId || '') !== normalizeText(space.id)) {
+        throw new Error(`The selected ${requestedRoot.type} does not belong to Confluence space ${spaceKey}.`);
+      }
+
+      const descendants = [];
+      let cursor = '';
+      do {
+        const payload = await requestJson(
+          requestedRoot.type === 'folder'
+            ? (
+              cursor
+                ? route`/wiki/api/v2/folders/${requestedRoot.id}/descendants?limit=${50}&cursor=${cursor}`
+                : route`/wiki/api/v2/folders/${requestedRoot.id}/descendants?limit=${50}`
+            )
+            : (
+              cursor
+                ? route`/wiki/api/v2/pages/${requestedRoot.id}/descendants?limit=${50}&cursor=${cursor}`
+                : route`/wiki/api/v2/pages/${requestedRoot.id}/descendants?limit=${50}`
+            ),
+          {},
+          'confluence'
+        );
+        const batch = Array.isArray(payload?.results) ? payload.results : [];
+        descendants.push(...batch);
+        cursor = batch.length ? getConfluenceNextCursor(payload) : '';
+      } while (
+        cursor &&
+        descendants.filter((item) => normalizeText(item?.type).toLowerCase() === 'page').length < MAX_CONFLUENCE_PAGES
+      );
+
+      const descendantPages = descendants
+        .filter((item) => normalizeText(item?.type).toLowerCase() === 'page')
+        .slice(0, requestedRoot.type === 'page' ? MAX_CONFLUENCE_PAGES - 1 : MAX_CONFLUENCE_PAGES);
+      const fetchedPages = await fetchConfluencePagesByIds(descendantPages.map((page) => page.id));
+      const descendantById = new Map(descendantPages.map((page) => [normalizeText(page.id), page]));
+      const pagesWithDepth = fetchedPages.map((page) => ({
+        ...page,
+        depth: Number(descendantById.get(normalizeText(page.id))?.depth || 0)
+      }));
+      const pages = requestedRoot.type === 'page'
+        ? [{ ...root, depth: 0 }, ...pagesWithDepth]
+        : pagesWithDepth;
+      const items = normalizeConfluencePages(pages, spaceKey);
+      const rootUrl = buildConfluenceWebUrl(root, requestedRoot.url);
+
+      return {
+        pages: items,
+        items,
+        source: {
+          spaceKey,
+          spaceId: normalizeText(space.id),
+          rootId: requestedRoot.id,
+          rootType: requestedRoot.type,
+          pageTitle: normalizeText(root.title || `${requestedRoot.type} ${requestedRoot.id}`),
+          pageUrl: rootUrl,
+          endpoint: `/wiki/api/v2/${requestedRoot.type}s/${requestedRoot.id}/descendants`,
+          itemCount: items.length,
+          truncated: Boolean(cursor || descendantPages.length > fetchedPages.length)
+        }
+      };
     }
 
     const pages = [];
@@ -1423,19 +1593,7 @@ async function fetchConfluenceSnapshot(confluenceSpaceKey = DEFAULT_CONFLUENCE_S
     } while (cursor && pages.length < MAX_CONFLUENCE_PAGES);
 
     const boundedPages = pages.slice(0, MAX_CONFLUENCE_PAGES);
-    const pagesById = new Map(boundedPages.map((page) => [normalizeText(page?.id || ''), page]));
-    const items = boundedPages.map((page) => ({
-      ...page,
-      type: 'page',
-      spaceKey,
-      title: normalizeText(page.title || `Page ${page.id}`),
-      parentId: normalizeText(page?.parentId || ''),
-      depth: getConfluencePageDepth(page, pagesById),
-      sourceUrl: buildConfluenceWebUrl(
-        page,
-        `${CONFLUENCE_SITE_URL}/wiki/pages/viewpage.action?pageId=${encodeURIComponent(page.id)}`
-      )
-    }));
+    const items = normalizeConfluencePages(boundedPages, spaceKey);
     const spaceUrl = buildConfluenceWebUrl(space, `${CONFLUENCE_SITE_URL}/wiki/spaces/${encodeURIComponent(spaceKey)}`);
 
     return {
@@ -1457,9 +1615,13 @@ async function fetchConfluenceSnapshot(confluenceSpaceKey = DEFAULT_CONFLUENCE_S
       items: [],
       source: {
         spaceKey,
+        rootId: requestedRoot?.id || '',
+        rootType: requestedRoot?.type || '',
         pageTitle: spaceKey,
-        pageUrl: `${CONFLUENCE_SITE_URL}/wiki/spaces/${encodeURIComponent(spaceKey)}`,
-        endpoint: '/wiki/api/v2/spaces/{spaceId}/pages',
+        pageUrl: requestedRoot?.url || `${CONFLUENCE_SITE_URL}/wiki/spaces/${encodeURIComponent(spaceKey)}`,
+        endpoint: requestedRoot
+          ? `/wiki/api/v2/${requestedRoot.type}s/${requestedRoot.id}/descendants`
+          : '/wiki/api/v2/spaces/{spaceId}/pages',
         itemCount: 0,
         error: normalizeText(error?.message || 'Unable to load Confluence space.')
       }
@@ -1480,13 +1642,15 @@ function buildSourceLinks({ jql, confluenceSnapshot, confluenceSpaceKey, refresh
       system: 'Confluence',
       endpoint: confluenceSnapshot?.source?.endpoint || '/wiki/api/v2/spaces/{spaceId}/pages',
       spaceKey: confluenceSpaceKey || confluenceSnapshot?.source?.spaceKey || DEFAULT_CONFLUENCE_SPACE_KEY,
+      rootId: confluenceSnapshot?.source?.rootId || '',
+      rootType: confluenceSnapshot?.source?.rootType || '',
       pageTitle: confluenceSnapshot?.source?.pageTitle || confluenceSpaceKey || DEFAULT_CONFLUENCE_SPACE_KEY,
       pageUrl: confluenceSnapshot?.source?.pageUrl || `${CONFLUENCE_SITE_URL}/wiki/spaces/${encodeURIComponent(confluenceSpaceKey || DEFAULT_CONFLUENCE_SPACE_KEY)}`,
       itemCount: confluenceSnapshot?.items?.length || 0,
       error: confluenceSnapshot?.source?.error || '',
       transformationSummary: confluenceSnapshot?.items?.length
-        ? `Fetched ${confluenceSnapshot.items.length} pages and live docs from Confluence space ${confluenceSpaceKey || DEFAULT_CONFLUENCE_SPACE_KEY}${confluenceSnapshot?.source?.truncated ? ` (capped at ${MAX_CONFLUENCE_PAGES} items for resolver performance)` : ''}.`
-        : `No accessible pages were returned from Confluence space ${confluenceSpaceKey || DEFAULT_CONFLUENCE_SPACE_KEY}.`,
+        ? `Fetched ${confluenceSnapshot.items.length} pages and live docs from ${confluenceSnapshot?.source?.rootId ? `"${confluenceSnapshot.source.pageTitle}" in ` : ''}Confluence space ${confluenceSpaceKey || DEFAULT_CONFLUENCE_SPACE_KEY}${confluenceSnapshot?.source?.truncated ? ` (capped at ${MAX_CONFLUENCE_PAGES} items for resolver performance)` : ''}.`
+        : `No accessible pages were returned from ${confluenceSnapshot?.source?.rootId ? `"${confluenceSnapshot.source.pageTitle}" in ` : ''}Confluence space ${confluenceSpaceKey || DEFAULT_CONFLUENCE_SPACE_KEY}.`,
       lastRefresh: refreshedAt
     },
     openai: {
@@ -1503,6 +1667,7 @@ async function loadDashboardSources({
   releaseId,
   team,
   confluenceSpaceKey,
+  confluenceContentUrl,
   view,
   settings,
   refreshedAt,
@@ -1511,7 +1676,7 @@ async function loadDashboardSources({
   const jql = buildJql({ releaseId, team, view }, settings);
   const requests = [
     fetchJiraIssues(jql),
-    fetchConfluenceSnapshot(confluenceSpaceKey)
+    fetchConfluenceSnapshot(confluenceSpaceKey, confluenceContentUrl)
   ];
   if (includeSpaceOptions) requests.push(fetchConfluenceSpaces());
 
@@ -1543,6 +1708,7 @@ function buildEmptyDashboardResponse({ payload = {}, refreshedAt = new Date().to
   const releaseId = normalizeText(payload.releaseId || settings.defaultReleaseId || DEFAULT_RELEASE_ID);
   const team = normalizeText(payload.team || settings.defaultTeam || DEFAULT_TEAM);
   const confluenceSpaceKey = normalizeText(payload.confluenceSpaceKey || settings.defaultConfluenceSpaceKey || DEFAULT_CONFLUENCE_SPACE_KEY).toUpperCase();
+  const confluenceContentUrl = normalizeText(payload.confluenceContentUrl || '');
   const jql = buildJql({ releaseId, team, view: payload.view }, settings);
   const sourceLinks = buildSourceLinks({
     jql,
@@ -1558,7 +1724,7 @@ function buildEmptyDashboardResponse({ payload = {}, refreshedAt = new Date().to
     viewOptions: DEFAULT_VIEW_OPTIONS,
     issues: [],
     dashboard: {
-      scope: { releaseId, team, confluenceSpaceKey },
+      scope: { releaseId, team, confluenceSpaceKey, confluenceContentUrl },
       summary: {
         total: 0,
         visible: 0,
@@ -1715,11 +1881,12 @@ resolver.define('getDashboardData', async ({ payload }) => {
   const confluenceSpaceKey = normalizeText(
     payload?.confluenceSpaceKey || settings.defaultConfluenceSpaceKey || DEFAULT_CONFLUENCE_SPACE_KEY
   ).toUpperCase();
+  const confluenceContentUrl = normalizeText(payload?.confluenceContentUrl || '').slice(0, 2000);
   const view = normalizeText(payload?.view || 'Executive');
   const refreshedAt = new Date().toISOString();
 
   try {
-    console.info(`Dashboard readout started for release "${releaseId}" and space "${confluenceSpaceKey}".`);
+    console.info(`Dashboard readout started for release "${releaseId}" and space "${confluenceSpaceKey}"${confluenceContentUrl ? ' with a selected content root' : ''}.`);
     const {
       jql,
       issues,
@@ -1733,6 +1900,7 @@ resolver.define('getDashboardData', async ({ payload }) => {
       releaseId,
       team,
       confluenceSpaceKey,
+      confluenceContentUrl,
       view,
       settings,
       refreshedAt,
@@ -1745,7 +1913,8 @@ resolver.define('getDashboardData', async ({ payload }) => {
       Promise.resolve(buildTeamOptions(issues))
     ]);
 
-    const cachedAi = await readAiCache(releaseId, team, confluenceSpaceKey);
+    const confluenceRootId = normalizeText(confluenceSnapshot?.source?.rootId || '');
+    const cachedAi = await readAiCache(releaseId, team, confluenceSpaceKey, confluenceRootId);
     const aiResult = cachedAi?.fingerprint === fingerprint
       ? {
         state: 'loaded',
@@ -1786,7 +1955,12 @@ resolver.define('getDashboardData', async ({ payload }) => {
       aiResult.state === 'loaded' ? aiAnalysis : null,
       refreshedAt
     );
-    const releaseTrend = await recordReleaseHistory(releaseId, confluenceSpaceKey, historySnapshot);
+    const releaseTrend = await recordReleaseHistory(
+      releaseId,
+      confluenceSpaceKey,
+      confluenceRootId,
+      historySnapshot
+    );
     const aiSummary = aiAnalysis?.executiveSummary || null;
     const aiStatus = { state: aiResult.state, code: aiResult.code, message: aiResult.message };
     const cardData = {
@@ -1801,7 +1975,17 @@ resolver.define('getDashboardData', async ({ payload }) => {
       viewOptions: DEFAULT_VIEW_OPTIONS,
       issues: [],
       dashboard: {
-        scope: { releaseId, team, confluenceSpaceKey },
+        scope: {
+          releaseId,
+          team,
+          confluenceSpaceKey,
+          confluenceContentUrl,
+          confluenceRootId,
+          confluenceRootType: normalizeText(confluenceSnapshot?.source?.rootType || ''),
+          confluenceRootTitle: confluenceRootId
+            ? normalizeText(confluenceSnapshot?.source?.pageTitle || '')
+            : ''
+        },
         summary: {
           total: issues.length,
           visible: issues.length,
@@ -1866,6 +2050,7 @@ resolver.define('getDashboardAiAnalysis', async ({ payload }) => {
   const confluenceSpaceKey = normalizeText(
     payload?.confluenceSpaceKey || settings.defaultConfluenceSpaceKey || DEFAULT_CONFLUENCE_SPACE_KEY
   ).toUpperCase();
+  const confluenceContentUrl = normalizeText(payload?.confluenceContentUrl || '').slice(0, 2000);
   const view = normalizeText(payload?.view || 'Executive');
   const requestedProfile = normalizeText(payload?.evidenceProfile || 'full').toLowerCase();
   const evidenceProfile = ['full', 'compact', 'minimal'].includes(requestedProfile) ? requestedProfile : 'full';
@@ -1886,11 +2071,13 @@ resolver.define('getDashboardAiAnalysis', async ({ payload }) => {
       releaseId,
       team,
       confluenceSpaceKey,
+      confluenceContentUrl,
       view,
       settings,
       refreshedAt
     });
-    const cachedAi = await readAiCache(releaseId, team, confluenceSpaceKey);
+    const confluenceRootId = normalizeText(confluenceSnapshot?.source?.rootId || '');
+    const cachedAi = await readAiCache(releaseId, team, confluenceSpaceKey, confluenceRootId);
 
     let aiResult;
     if (cachedAi?.fingerprint === fingerprint) {
@@ -1950,7 +2137,14 @@ resolver.define('getDashboardAiAnalysis', async ({ payload }) => {
     }
 
     if (aiResult.code !== 'cached') {
-      await writeAiCache(releaseId, team, confluenceSpaceKey, fingerprint, aiResult.analysis);
+      await writeAiCache(
+        releaseId,
+        team,
+        confluenceSpaceKey,
+        confluenceRootId,
+        fingerprint,
+        aiResult.analysis
+      );
     }
 
     const normalizedRecords = applyAiRisksToRecords(baseRecords, aiResult.analysis);
@@ -1961,7 +2155,12 @@ resolver.define('getDashboardAiAnalysis', async ({ payload }) => {
       aiResult.analysis,
       refreshedAt
     );
-    const releaseTrend = await recordReleaseHistory(releaseId, confluenceSpaceKey, historySnapshot);
+    const releaseTrend = await recordReleaseHistory(
+      releaseId,
+      confluenceSpaceKey,
+      confluenceRootId,
+      historySnapshot
+    );
 
     return {
       completed: true,

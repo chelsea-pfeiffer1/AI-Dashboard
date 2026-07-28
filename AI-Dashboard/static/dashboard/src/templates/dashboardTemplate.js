@@ -3,6 +3,7 @@ export const dashboardTemplate = {
     releaseId: '',
     team: 'VMS',
     confluenceSpaceKey: '',
+    confluenceContentUrl: '',
     view: 'Executive'
   },
   summary: {
@@ -90,6 +91,10 @@ export const dashboardTemplate = {
   scope: {
     releaseId: '',
     team: 'VMS',
-    confluenceSpaceKey: ''
+    confluenceSpaceKey: '',
+    confluenceContentUrl: '',
+    confluenceRootId: '',
+    confluenceRootType: '',
+    confluenceRootTitle: ''
   }
 };
