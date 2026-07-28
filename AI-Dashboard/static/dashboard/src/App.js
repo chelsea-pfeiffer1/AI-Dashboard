@@ -941,11 +941,9 @@ export default function App() {
           <header style={headerStyle}>
             <div>
               <div style={eyebrowStyle}>Executive PMO Intelligence</div>
-              <h1 style={pageTitleStyle}>VMS Release Dashboard</h1>
+              <h1 style={pageTitleStyle}>Release Dashboard</h1>
               <div style={headerMetaStyle}>
                 <strong>{dashboard?.scope?.releaseId || config?.releaseId || 'Unknown release'}</strong>
-                <span>·</span>
-                <span>{dashboard?.scope?.team || config?.team || 'Unknown team'}</span>
                 <span>·</span>
                 <span>Confluence {dashboard?.scope?.confluenceRootTitle || dashboard?.scope?.confluenceSpaceKey || config?.confluenceSpaceKey || 'Unknown space'}</span>
                 <span>·</span>
